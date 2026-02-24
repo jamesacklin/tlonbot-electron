@@ -1,6 +1,7 @@
 import { ChildProcess, spawn } from "child_process";
 import { EventEmitter } from "events";
 import * as fs from "fs";
+import * as net from "net";
 import * as path from "path";
 import {
   getVereBinaryPath,
@@ -39,6 +40,51 @@ export class VereManager extends EventEmitter {
   private openLogStream(): fs.WriteStream {
     const logPath = path.join(getLogsPath(), "vere.log");
     return fs.createWriteStream(logPath, { flags: "a" });
+  }
+
+  private reservePort(port: number): Promise<number> {
+    return new Promise((resolve, reject) => {
+      const server = net.createServer();
+      server.unref();
+
+      server.on("error", (err) => {
+        reject(err);
+      });
+
+      server.listen({ host: "127.0.0.1", port }, () => {
+        const addr = server.address();
+        if (!addr || typeof addr === "string") {
+          server.close();
+          reject(new Error("Failed to resolve reserved port"));
+          return;
+        }
+
+        const resolvedPort = addr.port;
+        server.close((closeErr) => {
+          if (closeErr) {
+            reject(closeErr);
+          } else {
+            resolve(resolvedPort);
+          }
+        });
+      });
+    });
+  }
+
+  private async resolveAvailablePort(preferredPort: number): Promise<number> {
+    try {
+      await this.reservePort(preferredPort);
+      return preferredPort;
+    } catch (err: any) {
+      if (err?.code !== "EADDRINUSE") {
+        throw err;
+      }
+
+      const fallbackPort = await this.reservePort(0);
+      this.log(`Port ${preferredPort} is in use; switching vere HTTP port to ${fallbackPort}`);
+      setConfig({ verePort: fallbackPort });
+      return fallbackPort;
+    }
   }
 
   private clearRestartTimer(): void {
@@ -80,100 +126,113 @@ export class VereManager extends EventEmitter {
         }
       }
 
-      // First boot (urbit 4.x):
-      // ./urbit -w <moon-name> -G <key> -c <pier-path> --http-port <port>
-      const moonName = moonId.trim().replace(/^~+/, "");
-      const args = [
-        "-t",
-        "-w", moonName,
-        "-G", moonKey,
-        "-c", pierPath,
-        "--http-port", String(config.verePort),
-      ];
-
-      const redactedArgs = [
-        "-t",
-        "-w", moonName,
-        "-G", "[redacted]",
-        "-c", pierPath,
-        "--http-port", String(config.verePort),
-      ];
-      this.log(`Booting moon: ${verePath} ${redactedArgs.join(" ")}`);
-
-      this.process = spawn(verePath, args, {
-        stdio: ["pipe", "pipe", "pipe"],
-      });
-
-      let codeExtracted = false;
-      let bootComplete = false;
-
-      const onData = (data: Buffer) => {
-        const text = data.toString();
-        this.log(text);
-
-        // Detect HTTP server live
-        const httpMatch = text.match(
-          /http: web interface live on http:\/\/localhost:(\d+)/
-        );
-        if (httpMatch) {
-          this.httpPort = parseInt(httpMatch[1], 10);
-          bootComplete = true;
-          this.setState("running");
-          this.restartCount = 0;
-          this.emit("ready", this.httpPort);
-
-          // Now extract +code
-          setTimeout(() => {
-            this.extractCode()
-              .then((code) => resolve(code))
-              .catch(reject);
-          }, 2000);
-        }
-
-        // Detect +code response (pattern: ~sampel-sampel-sampel-sampel)
-        if (!codeExtracted) {
-          const codeMatch = text.match(
-            /\s*(~?[a-z]{6}-[a-z]{6}-[a-z]{6}-[a-z]{6})\s*$/m
-          );
-          if (codeMatch && bootComplete) {
-            const code = codeMatch[1].startsWith("~")
-              ? codeMatch[1].slice(1)
-              : codeMatch[1];
-            codeExtracted = true;
-            setConfig({ moonCode: code });
-            this.emit("codeExtracted", code);
+      this.resolveAvailablePort(0)
+        .then((resolvedPort) => {
+          if (config.verePort !== resolvedPort) {
+            this.log(`Using vere HTTP port ${resolvedPort} for initial boot`);
+            setConfig({ verePort: resolvedPort });
           }
-        }
-      };
 
-      this.process.stdout?.on("data", onData);
-      this.process.stderr?.on("data", (data: Buffer) => {
-        this.log(`[stderr] ${data.toString()}`);
-      });
+          // First boot (urbit 4.x):
+          // ./urbit -w <moon-name> -G <key> -c <pier-path> --http-port <port>
+          const moonName = moonId.trim().replace(/^~+/, "");
+          const args = [
+            "-t",
+            "-w", moonName,
+            "-G", moonKey,
+            "-c", pierPath,
+            "--http-port", String(resolvedPort),
+          ];
 
-      this.process.on("error", (err) => {
-        this.log(`Process error: ${err.message}`);
-        this.setState("error");
-        reject(err);
-      });
+          const redactedArgs = [
+            "-t",
+            "-w", moonName,
+            "-G", "[redacted]",
+            "-c", pierPath,
+            "--http-port", String(resolvedPort),
+          ];
+          this.log(`Booting moon: ${verePath} ${redactedArgs.join(" ")}`);
 
-      this.process.on("exit", (code, signal) => {
-        this.log(`Process exited with code ${code} signal ${signal ?? "none"}`);
-        if (!this.shutdownRequested && !bootComplete) {
+          this.process = spawn(verePath, args, {
+            stdio: ["pipe", "pipe", "pipe"],
+          });
+
+          let codeExtracted = false;
+          let bootComplete = false;
+
+          const onData = (data: Buffer) => {
+            const text = data.toString();
+            this.log(text);
+
+            // Detect HTTP server live
+            const httpMatch = text.match(
+              /http: web interface live on http:\/\/localhost:(\d+)/
+            );
+            if (httpMatch) {
+              this.httpPort = parseInt(httpMatch[1], 10);
+              bootComplete = true;
+              this.setState("running");
+              this.restartCount = 0;
+              this.emit("ready", this.httpPort);
+
+              // Now extract +code
+              setTimeout(() => {
+                this.extractCode()
+                  .then((code) => resolve(code))
+                  .catch(reject);
+              }, 2000);
+            }
+
+            // Detect +code response (pattern: ~sampel-sampel-sampel-sampel)
+            if (!codeExtracted) {
+              const codeMatch = text.match(
+                /\s*(~?[a-z]{6}-[a-z]{6}-[a-z]{6}-[a-z]{6})\s*$/m
+              );
+              if (codeMatch && bootComplete) {
+                const code = codeMatch[1].startsWith("~")
+                  ? codeMatch[1].slice(1)
+                  : codeMatch[1];
+                codeExtracted = true;
+                setConfig({ moonCode: code });
+                this.emit("codeExtracted", code);
+              }
+            }
+          };
+
+          this.process.stdout?.on("data", onData);
+          this.process.stderr?.on("data", (data: Buffer) => {
+            this.log(`[stderr] ${data.toString()}`);
+          });
+
+          this.process.on("error", (err) => {
+            this.log(`Process error: ${err.message}`);
+            this.setState("error");
+            reject(err);
+          });
+
+          this.process.on("exit", (code, signal) => {
+            this.log(`Process exited with code ${code} signal ${signal ?? "none"}`);
+            if (!this.shutdownRequested && !bootComplete) {
+              this.setState("error");
+              const details = code === null && signal ? `signal ${signal}` : `code ${code}`;
+              reject(new Error(`vere exited during boot with ${details}`));
+            }
+          });
+
+          // Timeout for boot
+          setTimeout(() => {
+            if (!bootComplete) {
+              this.log("Boot timeout after 5 minutes");
+              this.setState("error");
+              reject(new Error("vere boot timed out"));
+            }
+          }, 300000);
+        })
+        .catch((err: any) => {
+          this.log(`Failed to resolve vere port: ${err.message}`);
           this.setState("error");
-          const details = code === null && signal ? `signal ${signal}` : `code ${code}`;
-          reject(new Error(`vere exited during boot with ${details}`));
-        }
-      });
-
-      // Timeout for boot
-      setTimeout(() => {
-        if (!bootComplete) {
-          this.log("Boot timeout after 5 minutes");
-          this.setState("error");
-          reject(new Error("vere boot timed out"));
-        }
-      }, 300000);
+          reject(err);
+        });
     });
   }
 
@@ -188,55 +247,63 @@ export class VereManager extends EventEmitter {
       const pierPath = getPierPath(getConfig().moonId);
       const config = getConfig();
 
-      // Subsequent boots: existing pier with non-interactive mode.
-      const args = ["-t", "--http-port", String(config.verePort), pierPath];
+      this.resolveAvailablePort(config.verePort)
+        .then((resolvedPort) => {
+          // Subsequent boots: existing pier with non-interactive mode.
+          const args = ["-t", "--http-port", String(resolvedPort), pierPath];
 
-      this.log(`Starting vere: ${verePath} ${args.join(" ")}`);
+          this.log(`Starting vere: ${verePath} ${args.join(" ")}`);
 
-      this.process = spawn(verePath, args, {
-        stdio: ["pipe", "pipe", "pipe"],
-      });
+          this.process = spawn(verePath, args, {
+            stdio: ["pipe", "pipe", "pipe"],
+          });
 
-      this.process.stdout?.on("data", (data: Buffer) => {
-        const text = data.toString();
-        this.log(text);
+          this.process.stdout?.on("data", (data: Buffer) => {
+            const text = data.toString();
+            this.log(text);
 
-        const httpMatch = text.match(
-          /http: web interface live on http:\/\/localhost:(\d+)/
-        );
-        if (httpMatch) {
-          this.httpPort = parseInt(httpMatch[1], 10);
-          this.setState("running");
-          this.restartCount = 0;
-          this.emit("ready", this.httpPort);
-          resolve();
-        }
-      });
+            const httpMatch = text.match(
+              /http: web interface live on http:\/\/localhost:(\d+)/
+            );
+            if (httpMatch) {
+              this.httpPort = parseInt(httpMatch[1], 10);
+              this.setState("running");
+              this.restartCount = 0;
+              this.emit("ready", this.httpPort);
+              resolve();
+            }
+          });
 
-      this.process.stderr?.on("data", (data: Buffer) => {
-        this.log(`[stderr] ${data.toString()}`);
-      });
+          this.process.stderr?.on("data", (data: Buffer) => {
+            this.log(`[stderr] ${data.toString()}`);
+          });
 
-      this.process.on("error", (err) => {
-        this.log(`Process error: ${err.message}`);
-        this.setState("error");
-        reject(err);
-      });
+          this.process.on("error", (err) => {
+            this.log(`Process error: ${err.message}`);
+            this.setState("error");
+            reject(err);
+          });
 
-      this.process.on("exit", (code, signal) => {
-        this.log(`Process exited with code ${code} signal ${signal ?? "none"}`);
-        if (!this.shutdownRequested) {
-          this.setState("stopped");
-          this.maybeRestart();
-        }
-      });
+          this.process.on("exit", (code, signal) => {
+            this.log(`Process exited with code ${code} signal ${signal ?? "none"}`);
+            if (!this.shutdownRequested) {
+              this.setState("stopped");
+              this.maybeRestart();
+            }
+          });
 
-      setTimeout(() => {
-        if (this.state === "booting") {
+          setTimeout(() => {
+            if (this.state === "booting") {
+              this.setState("error");
+              reject(new Error("vere start timed out"));
+            }
+          }, 120000);
+        })
+        .catch((err: any) => {
+          this.log(`Failed to resolve vere port: ${err.message}`);
           this.setState("error");
-          reject(new Error("vere start timed out"));
-        }
-      }, 120000);
+          reject(err);
+        });
     });
   }
 
