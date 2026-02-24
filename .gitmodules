@@ -1,0 +1,3 @@
+[submodule "resources/tlon-plugin"]
+	path = resources/tlon-plugin
+	url = https://github.com/tloncorp/openclaw-tlon
