@@ -5,6 +5,7 @@ import * as path from "path";
 import * as http from "http";
 import {
   getConfig,
+  getDashboardUrl,
   getOpenClawHome,
   getLogsPath,
 } from "../config";
@@ -20,6 +21,7 @@ export class OpenClawManager extends EventEmitter {
   private restartDelay = 2000;
   private shutdownRequested = false;
   private healthCheckInterval: ReturnType<typeof setInterval> | null = null;
+  private authHintEmitted = false;
 
   getState(): OpenClawState {
     return this.state;
@@ -64,6 +66,7 @@ export class OpenClawManager extends EventEmitter {
   async start(): Promise<void> {
     return new Promise((resolve, reject) => {
       this.shutdownRequested = false;
+      this.authHintEmitted = false;
       this.setState("starting");
       this.logStream = this.openLogStream();
 
@@ -80,22 +83,32 @@ export class OpenClawManager extends EventEmitter {
         config.gatewayToken,
       ];
 
-      this.log(`Starting OpenClaw: ${openclawBin} ${args.join(" ")}`);
+      const redactedArgs = [
+        "gateway",
+        "--port",
+        String(config.gatewayPort),
+        "--bind",
+        "lan",
+        "--token",
+        "[redacted]",
+      ];
+      this.log(`Starting OpenClaw: ${openclawBin} ${redactedArgs.join(" ")}`);
 
       this.process = spawn(openclawBin, args, {
         stdio: ["pipe", "pipe", "pipe"],
         env: {
           ...process.env,
           OPENCLAW_HOME: getOpenClawHome(),
+          OPENCLAW_GATEWAY_TOKEN: config.gatewayToken,
         },
       });
 
       this.process.stdout?.on("data", (data: Buffer) => {
-        this.log(data.toString());
+        this.handleProcessOutput(data.toString(), false);
       });
 
       this.process.stderr?.on("data", (data: Buffer) => {
-        this.log(`[stderr] ${data.toString()}`);
+        this.handleProcessOutput(data.toString(), true);
       });
 
       this.process.on("error", (err) => {
@@ -229,8 +242,21 @@ export class OpenClawManager extends EventEmitter {
   }
 
   getGatewayUrl(): string {
-    const config = getConfig();
-    return `http://localhost:${config.gatewayPort}`;
+    return getDashboardUrl(true);
+  }
+
+  private handleProcessOutput(output: string, isStderr: boolean): void {
+    this.log(isStderr ? `[stderr] ${output}` : output);
+
+    if (
+      !this.authHintEmitted &&
+      /unauthorized:\s*gateway token missing/i.test(output)
+    ) {
+      this.authHintEmitted = true;
+      const dashboardUrl = getDashboardUrl(true);
+      this.log(`Control UI auth missing; tokenized dashboard URL: ${dashboardUrl}`);
+      this.emit("authRequired", { dashboardUrl });
+    }
   }
 
   private log(message: string): void {

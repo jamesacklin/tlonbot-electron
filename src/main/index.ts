@@ -1,4 +1,4 @@
-import { app, BrowserWindow } from "electron";
+import { app, BrowserWindow, shell } from "electron";
 import * as path from "path";
 import { isSetupComplete, ensureDirectories, getConfig } from "./config";
 import { TrayManager } from "./tray";
@@ -61,6 +61,10 @@ function setupTray(): void {
   // Wire up state changes to tray
   vere.on("stateChange", (state) => tray.updateVereState(state));
   openclaw.on("stateChange", (state) => tray.updateOpenClawState(state));
+  openclaw.on("authRequired", ({ dashboardUrl }) => {
+    console.warn("OpenClaw reported missing dashboard token; opening tokenized dashboard URL.");
+    void shell.openExternal(dashboardUrl);
+  });
 }
 
 async function startServices(): Promise<void> {

@@ -31,7 +31,7 @@
       </div>
       <p>The whole process takes a few minutes.</p>
       <div class="btn-row">
-        <button class="primary" onclick="nextStep()">Get Started</button>
+        <button class="primary" id="btn-step-0-next">Get Started</button>
       </div>
     </div>
 
@@ -61,8 +61,8 @@
       <div class="input-hint">The long hex key string from the |moon output</div>
 
       <div class="btn-row">
-        <button onclick="prevStep()">Back</button>
-        <button class="primary" onclick="nextStep()" id="btn-credentials">Next</button>
+        <button id="btn-step-1-back">Back</button>
+        <button class="primary" id="btn-step-1-next">Next</button>
       </div>
     </div>
 
@@ -103,8 +103,8 @@
       </select>
 
       <div class="btn-row">
-        <button onclick="prevStep()">Back</button>
-        <button class="primary" onclick="nextStep()">Next</button>
+        <button id="btn-step-2-back">Back</button>
+        <button class="primary" id="btn-step-2-next">Next</button>
       </div>
     </div>
 
@@ -126,8 +126,8 @@
       <div class="log-output" id="log-output"></div>
 
       <div class="btn-row">
-        <button onclick="prevStep()" id="btn-back-boot">Back</button>
-        <button class="primary" onclick="startDownloadAndBoot()" id="btn-boot">Start</button>
+        <button id="btn-back-boot">Back</button>
+        <button class="primary" id="btn-boot">Start</button>
       </div>
     </div>
 
@@ -145,7 +145,7 @@
       <p>Use the menubar icon to manage TlonBot, view logs, or change settings.</p>
 
       <div class="btn-row">
-        <button class="primary" onclick="finishWizard()">Done</button>
+        <button class="primary" id="btn-finish">Done</button>
       </div>
     </div>
   </div>

@@ -78,12 +78,59 @@ export function getVereBinaryPath(): string {
   return path.join(getBinPath(), "urbit");
 }
 
-export function getPierPath(): string {
+function normalizeMoonName(moonId: string): string {
+  return moonId.trim().replace(/^~+/, "").toLowerCase();
+}
+
+function hasUsablePier(pierPath: string): boolean {
+  const urbPath = path.join(pierPath, ".urb");
+  if (!fs.existsSync(urbPath)) return false;
+  try {
+    return fs.readdirSync(urbPath).length > 0;
+  } catch {
+    return false;
+  }
+}
+
+export function getPiersPath(): string {
+  return path.join(getAppDataPath(), "piers");
+}
+
+export function getLegacyPierPath(): string {
   return path.join(getAppDataPath(), "pier");
+}
+
+export function getPierPath(moonId?: string): string {
+  const legacyPier = getLegacyPierPath();
+  const resolvedMoonId = moonId ?? getConfig().moonId;
+  const moonName = normalizeMoonName(resolvedMoonId || "");
+
+  if (!moonName) return legacyPier;
+
+  const namedPier = path.join(getPiersPath(), moonName);
+  // Migration fallback for older installs that already have a valid legacy pier.
+  if (!fs.existsSync(namedPier) && hasUsablePier(legacyPier)) {
+    return legacyPier;
+  }
+
+  return namedPier;
 }
 
 export function getOpenClawHome(): string {
   return path.join(getAppDataPath(), "openclaw");
+}
+
+export function getGatewayBaseUrl(): string {
+  const config = getConfig();
+  return `http://localhost:${config.gatewayPort}`;
+}
+
+export function getDashboardUrl(includeToken = true): string {
+  const baseUrl = getGatewayBaseUrl();
+  if (!includeToken) return baseUrl;
+
+  const token = getConfig().gatewayToken.trim();
+  return token ? `${baseUrl}#token=${encodeURIComponent(token)}` : baseUrl;
 }
 
 export function getOpenClawConfigPath(): string {
@@ -109,7 +156,7 @@ export function getLogsPath(): string {
 export function ensureDirectories(): void {
   const dirs = [
     getBinPath(),
-    getPierPath(),
+    getPiersPath(),
     getOpenClawHome(),
     getWorkspacePath(),
     getExtensionsPath(),

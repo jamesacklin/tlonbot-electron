@@ -2,7 +2,7 @@ import { Tray, Menu, nativeImage, shell, app } from "electron";
 import * as path from "path";
 import { VereState } from "./processes/vere";
 import { OpenClawState } from "./processes/openclaw";
-import { getLogsPath, getConfig } from "./config";
+import { getLogsPath, getDashboardUrl } from "./config";
 
 export class TrayManager {
   private tray: Tray | null = null;
@@ -94,8 +94,7 @@ export class TrayManager {
   private updateMenu(): void {
     if (!this.tray) return;
 
-    const config = getConfig();
-    const gatewayUrl = `http://localhost:${config.gatewayPort}`;
+    const dashboardUrl = getDashboardUrl(true);
 
     const contextMenu = Menu.buildFromTemplate([
       {
@@ -120,7 +119,7 @@ export class TrayManager {
         label: "Open Dashboard",
         enabled: this.openclawState === "running",
         click: () => {
-          shell.openExternal(gatewayUrl);
+          shell.openExternal(dashboardUrl);
         },
       },
       { type: "separator" },

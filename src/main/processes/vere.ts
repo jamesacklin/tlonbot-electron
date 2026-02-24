@@ -47,19 +47,49 @@ export class VereManager extends EventEmitter {
       this.logStream = this.openLogStream();
 
       const verePath = getVereBinaryPath();
-      const pierPath = getPierPath();
+      const pierPath = getPierPath(moonId);
       const config = getConfig();
 
-      // First boot: create pier with moon credentials
-      // ./urbit -w <moon-name> -G <key> -p <port> <pier-path>
+      // urbit -c requires the target pier path to not exist.
+      // Clean up stale/partial first-run pier dirs before create.
+      if (fs.existsSync(pierPath)) {
+        const urbPath = path.join(pierPath, ".urb");
+        let isUsablePier = false;
+
+        if (fs.existsSync(urbPath)) {
+          try {
+            // Empty .urb directories are partial boot artifacts and not reusable.
+            isUsablePier = fs.readdirSync(urbPath).length > 0;
+          } catch {
+            isUsablePier = false;
+          }
+        }
+
+        if (!isUsablePier) {
+          this.log(`Removing stale pre-boot pier directory at ${pierPath}`);
+          fs.rmSync(pierPath, { recursive: true, force: true });
+        }
+      }
+
+      // First boot (urbit 4.x):
+      // ./urbit -w <moon-name> -G <key> -c <pier-path> --http-port <port>
+      const moonName = moonId.trim().replace(/^~+/, "");
       const args = [
-        "-w", moonId,
+        "-t",
+        "-w", moonName,
         "-G", moonKey,
-        "-p", String(config.verePort),
-        pierPath,
+        "-c", pierPath,
+        "--http-port", String(config.verePort),
       ];
 
-      this.log(`Booting moon: ${verePath} ${args.join(" ")}`);
+      const redactedArgs = [
+        "-t",
+        "-w", moonName,
+        "-G", "[redacted]",
+        "-c", pierPath,
+        "--http-port", String(config.verePort),
+      ];
+      this.log(`Booting moon: ${verePath} ${redactedArgs.join(" ")}`);
 
       this.process = spawn(verePath, args, {
         stdio: ["pipe", "pipe", "pipe"],
@@ -147,8 +177,8 @@ export class VereManager extends EventEmitter {
       const pierPath = getPierPath();
       const config = getConfig();
 
-      // Subsequent boots: just pass pier path
-      const args = [pierPath, "-p", String(config.verePort)];
+      // Subsequent boots: existing pier with non-interactive mode.
+      const args = ["-t", "--http-port", String(config.verePort), pierPath];
 
       this.log(`Starting vere: ${verePath} ${args.join(" ")}`);
 

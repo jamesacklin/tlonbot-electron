@@ -1,33 +1,30 @@
-export {};
+type TlonbotApi = {
+  getArchitecture: () => Promise<string>;
+  downloadVere: () => Promise<{ success: boolean; error?: string }>;
+  bootMoon: (
+    moonId: string,
+    moonKey: string
+  ) => Promise<{ success: boolean; code?: string; error?: string }>;
+  saveConfig: (config: Record<string, unknown>) => Promise<{ success: boolean }>;
+  finishSetup: () => Promise<{
+    success: boolean;
+    gatewayUrl?: string;
+    error?: string;
+  }>;
+  getConfig: () => Promise<Record<string, unknown>>;
+  getStatus: () => Promise<Record<string, unknown>>;
+  onProgress: (callback: (percent: number) => void) => () => void;
+  onStatus: (callback: (status: string) => void) => () => void;
+  onBootLog: (callback: (message: string) => void) => () => void;
+};
 
-declare global {
-  interface Window {
-    tlonbot: {
-      getArchitecture: () => Promise<string>;
-      downloadVere: () => Promise<{ success: boolean; error?: string }>;
-      bootMoon: (
-        moonId: string,
-        moonKey: string
-      ) => Promise<{ success: boolean; code?: string; error?: string }>;
-      saveConfig: (
-        config: Record<string, unknown>
-      ) => Promise<{ success: boolean }>;
-      finishSetup: () => Promise<{
-        success: boolean;
-        gatewayUrl?: string;
-        error?: string;
-      }>;
-      getConfig: () => Promise<Record<string, unknown>>;
-      getStatus: () => Promise<Record<string, unknown>>;
-      onProgress: (callback: (percent: number) => void) => () => void;
-      onStatus: (callback: (status: string) => void) => () => void;
-      onBootLog: (callback: (message: string) => void) => () => void;
-    };
-  }
-}
+type TlonbotWindow = Window & {
+  tlonbot: TlonbotApi;
+};
 
 let currentStep = 0;
 const totalSteps = 5;
+const tlonbotBridge = (window as unknown as TlonbotWindow).tlonbot;
 
 function $(id: string): HTMLElement {
   return document.getElementById(id)!;
@@ -98,7 +95,7 @@ function saveCredentials(): void {
   const moonId = ($("moon-id") as HTMLInputElement).value.trim();
   const moonKey = ($("moon-key") as HTMLInputElement).value.trim();
 
-  window.tlonbot.saveConfig({ ownerShip, moonId, moonKey });
+  tlonbotBridge.saveConfig({ ownerShip, moonId, moonKey });
 }
 
 function saveApiConfig(): void {
@@ -110,11 +107,11 @@ function saveApiConfig(): void {
   const apiKey = ($("api-key") as HTMLInputElement).value.trim();
   const model = ($("model-select") as HTMLSelectElement).value;
 
-  window.tlonbot.saveConfig({ apiProvider: provider, apiKey, model });
+  tlonbotBridge.saveConfig({ apiProvider: provider, apiKey, model });
 }
 
 async function initBootStep(): Promise<void> {
-  const arch = await window.tlonbot.getArchitecture();
+  const arch = await tlonbotBridge.getArchitecture();
   $("arch-label").textContent = `Detected: ${arch}. Will download the matching Urbit runtime.`;
 }
 
@@ -147,16 +144,16 @@ async function startDownloadAndBoot(): Promise<void> {
   logOutput.textContent = "";
 
   // Subscribe to events
-  const cleanupProgress = window.tlonbot.onProgress((percent: number) => {
+  const cleanupProgress = tlonbotBridge.onProgress((percent: number) => {
     progressFill.style.width = `${percent}%`;
     progressLabel.textContent = `Downloading... ${percent}%`;
   });
 
-  const cleanupStatus = window.tlonbot.onStatus((status: string) => {
+  const cleanupStatus = tlonbotBridge.onStatus((status: string) => {
     statusMessage.textContent = status;
   });
 
-  const cleanupLog = window.tlonbot.onBootLog((message: string) => {
+  const cleanupLog = tlonbotBridge.onBootLog((message: string) => {
     logOutput.textContent += message + "\n";
     logOutput.scrollTop = logOutput.scrollHeight;
   });
@@ -164,7 +161,7 @@ async function startDownloadAndBoot(): Promise<void> {
   try {
     // Step 1: Download vere
     statusMessage.textContent = "Downloading Urbit runtime...";
-    const dlResult = await window.tlonbot.downloadVere();
+    const dlResult = await tlonbotBridge.downloadVere();
     if (!dlResult.success) {
       throw new Error(dlResult.error || "Download failed");
     }
@@ -173,8 +170,8 @@ async function startDownloadAndBoot(): Promise<void> {
 
     // Step 2: Boot moon
     statusMessage.textContent = "Booting moon (this may take a few minutes)...";
-    const config = (await window.tlonbot.getConfig()) as { moonId: string; moonKey: string };
-    const bootResult = await window.tlonbot.bootMoon(config.moonId, config.moonKey);
+    const config = (await tlonbotBridge.getConfig()) as { moonId: string; moonKey: string };
+    const bootResult = await tlonbotBridge.bootMoon(config.moonId, config.moonKey);
     if (!bootResult.success) {
       throw new Error(bootResult.error || "Boot failed");
     }
@@ -182,7 +179,7 @@ async function startDownloadAndBoot(): Promise<void> {
     statusMessage.textContent = "Moon booted! Finishing setup...";
 
     // Step 3: Finish setup (generate config, start openclaw)
-    const setupResult = await window.tlonbot.finishSetup();
+    const setupResult = await tlonbotBridge.finishSetup();
     if (!setupResult.success) {
       throw new Error(setupResult.error || "Setup failed");
     }
@@ -210,8 +207,17 @@ function finishWizard(): void {
   window.close();
 }
 
-// Expose functions to HTML onclick handlers
-(window as any).nextStep = nextStep;
-(window as any).prevStep = prevStep;
-(window as any).startDownloadAndBoot = startDownloadAndBoot;
-(window as any).finishWizard = finishWizard;
+function wireButtons(): void {
+  $("btn-step-0-next").addEventListener("click", nextStep);
+  $("btn-step-1-back").addEventListener("click", prevStep);
+  $("btn-step-1-next").addEventListener("click", nextStep);
+  $("btn-step-2-back").addEventListener("click", prevStep);
+  $("btn-step-2-next").addEventListener("click", nextStep);
+  $("btn-back-boot").addEventListener("click", prevStep);
+  $("btn-boot").addEventListener("click", () => {
+    void startDownloadAndBoot();
+  });
+  $("btn-finish").addEventListener("click", finishWizard);
+}
+
+wireButtons();
