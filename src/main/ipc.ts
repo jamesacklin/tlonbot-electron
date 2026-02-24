@@ -40,6 +40,10 @@ export function registerIpcHandlers(
     vere.on("log", logCleanup);
 
     try {
+      win?.webContents.send("setup-status", "Stopping existing services...");
+      await openclaw.stop();
+      await vere.stop();
+
       win?.webContents.send("setup-status", "Booting moon...");
       const code = await vere.boot(moonId, moonKey);
       vere.removeListener("log", logCleanup);

@@ -102,12 +102,16 @@ export function getLegacyPierPath(): string {
 
 export function getPierPath(moonId?: string): string {
   const legacyPier = getLegacyPierPath();
+  const hasExplicitMoon = typeof moonId === "string";
   const resolvedMoonId = moonId ?? getConfig().moonId;
   const moonName = normalizeMoonName(resolvedMoonId || "");
 
   if (!moonName) return legacyPier;
 
   const namedPier = path.join(getPiersPath(), moonName);
+  // For explicit moon boot paths, never auto-fallback to legacy.
+  if (hasExplicitMoon) return namedPier;
+
   // Migration fallback for older installs that already have a valid legacy pier.
   if (!fs.existsSync(namedPier) && hasUsablePier(legacyPier)) {
     return legacyPier;
@@ -118,6 +122,10 @@ export function getPierPath(moonId?: string): string {
 
 export function getOpenClawHome(): string {
   return path.join(getAppDataPath(), "openclaw");
+}
+
+export function getOpenClawStatePath(): string {
+  return path.join(getOpenClawHome(), "state");
 }
 
 export function getGatewayBaseUrl(): string {
@@ -135,6 +143,20 @@ export function getDashboardUrl(includeToken = true): string {
 
 export function getOpenClawConfigPath(): string {
   return path.join(getOpenClawHome(), "openclaw.json");
+}
+
+export function getLegacyOpenClawConfigPath(): string {
+  return path.join(getOpenClawHome(), ".openclaw", "openclaw.json");
+}
+
+export function resolveOpenClawConfigPath(): string {
+  const canonicalPath = getOpenClawConfigPath();
+  if (fs.existsSync(canonicalPath)) return canonicalPath;
+
+  const legacyPath = getLegacyOpenClawConfigPath();
+  if (fs.existsSync(legacyPath)) return legacyPath;
+
+  return canonicalPath;
 }
 
 export function getWorkspacePath(): string {
@@ -158,6 +180,7 @@ export function ensureDirectories(): void {
     getBinPath(),
     getPiersPath(),
     getOpenClawHome(),
+    getOpenClawStatePath(),
     getWorkspacePath(),
     getExtensionsPath(),
     getLogsPath(),
@@ -224,6 +247,7 @@ export function generateOpenClawConfig(): void {
   }
 
   const configPath = getOpenClawConfigPath();
+  fs.mkdirSync(path.dirname(configPath), { recursive: true });
   fs.writeFileSync(configPath, JSON.stringify(openclawConfig, null, 2), "utf-8");
 }
 

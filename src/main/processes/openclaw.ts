@@ -6,6 +6,8 @@ import * as http from "http";
 import {
   getConfig,
   getDashboardUrl,
+  getOpenClawStatePath,
+  resolveOpenClawConfigPath,
   getOpenClawHome,
   getLogsPath,
 } from "../config";
@@ -17,6 +19,7 @@ export class OpenClawManager extends EventEmitter {
   private state: OpenClawState = "stopped";
   private logStream: fs.WriteStream | null = null;
   private restartCount = 0;
+  private restartTimer: ReturnType<typeof setTimeout> | null = null;
   private maxRestarts = 5;
   private restartDelay = 2000;
   private shutdownRequested = false;
@@ -35,6 +38,13 @@ export class OpenClawManager extends EventEmitter {
   private openLogStream(): fs.WriteStream {
     const logPath = path.join(getLogsPath(), "openclaw.log");
     return fs.createWriteStream(logPath, { flags: "a" });
+  }
+
+  private clearRestartTimer(): void {
+    if (this.restartTimer) {
+      clearTimeout(this.restartTimer);
+      this.restartTimer = null;
+    }
   }
 
   private findOpenClawBinary(): string {
@@ -65,6 +75,7 @@ export class OpenClawManager extends EventEmitter {
 
   async start(): Promise<void> {
     return new Promise((resolve, reject) => {
+      this.clearRestartTimer();
       this.shutdownRequested = false;
       this.authHintEmitted = false;
       this.setState("starting");
@@ -99,6 +110,8 @@ export class OpenClawManager extends EventEmitter {
         env: {
           ...process.env,
           OPENCLAW_HOME: getOpenClawHome(),
+          OPENCLAW_STATE_DIR: getOpenClawStatePath(),
+          OPENCLAW_CONFIG_PATH: resolveOpenClawConfigPath(),
           OPENCLAW_GATEWAY_TOKEN: config.gatewayToken,
         },
       });
@@ -197,7 +210,9 @@ export class OpenClawManager extends EventEmitter {
     const delay = this.restartDelay * Math.pow(2, this.restartCount - 1);
     this.log(`Restarting in ${delay}ms (attempt ${this.restartCount}/${this.maxRestarts})`);
 
-    setTimeout(() => {
+    this.clearRestartTimer();
+    this.restartTimer = setTimeout(() => {
+      this.restartTimer = null;
       if (!this.shutdownRequested) {
         this.start().catch((err) => {
           this.log(`Restart failed: ${err.message}`);
@@ -207,6 +222,7 @@ export class OpenClawManager extends EventEmitter {
   }
 
   async stop(): Promise<void> {
+    this.clearRestartTimer();
     this.shutdownRequested = true;
 
     if (this.healthCheckInterval) {

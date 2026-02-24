@@ -17,6 +17,7 @@ export class VereManager extends EventEmitter {
   private state: VereState = "stopped";
   private logStream: fs.WriteStream | null = null;
   private restartCount = 0;
+  private restartTimer: ReturnType<typeof setTimeout> | null = null;
   private maxRestarts = 5;
   private restartDelay = 2000;
   private shutdownRequested = false;
@@ -40,8 +41,16 @@ export class VereManager extends EventEmitter {
     return fs.createWriteStream(logPath, { flags: "a" });
   }
 
+  private clearRestartTimer(): void {
+    if (this.restartTimer) {
+      clearTimeout(this.restartTimer);
+      this.restartTimer = null;
+    }
+  }
+
   async boot(moonId: string, moonKey: string): Promise<string> {
     return new Promise((resolve, reject) => {
+      this.clearRestartTimer();
       this.shutdownRequested = false;
       this.setState("booting");
       this.logStream = this.openLogStream();
@@ -148,11 +157,12 @@ export class VereManager extends EventEmitter {
         reject(err);
       });
 
-      this.process.on("exit", (code) => {
-        this.log(`Process exited with code ${code}`);
+      this.process.on("exit", (code, signal) => {
+        this.log(`Process exited with code ${code} signal ${signal ?? "none"}`);
         if (!this.shutdownRequested && !bootComplete) {
           this.setState("error");
-          reject(new Error(`vere exited during boot with code ${code}`));
+          const details = code === null && signal ? `signal ${signal}` : `code ${code}`;
+          reject(new Error(`vere exited during boot with ${details}`));
         }
       });
 
@@ -169,12 +179,13 @@ export class VereManager extends EventEmitter {
 
   async start(): Promise<void> {
     return new Promise((resolve, reject) => {
+      this.clearRestartTimer();
       this.shutdownRequested = false;
       this.setState("booting");
       this.logStream = this.openLogStream();
 
       const verePath = getVereBinaryPath();
-      const pierPath = getPierPath();
+      const pierPath = getPierPath(getConfig().moonId);
       const config = getConfig();
 
       // Subsequent boots: existing pier with non-interactive mode.
@@ -212,8 +223,8 @@ export class VereManager extends EventEmitter {
         reject(err);
       });
 
-      this.process.on("exit", (code) => {
-        this.log(`Process exited with code ${code}`);
+      this.process.on("exit", (code, signal) => {
+        this.log(`Process exited with code ${code} signal ${signal ?? "none"}`);
         if (!this.shutdownRequested) {
           this.setState("stopped");
           this.maybeRestart();
@@ -283,7 +294,9 @@ export class VereManager extends EventEmitter {
     const delay = this.restartDelay * Math.pow(2, this.restartCount - 1);
     this.log(`Restarting in ${delay}ms (attempt ${this.restartCount}/${this.maxRestarts})`);
 
-    setTimeout(() => {
+    this.clearRestartTimer();
+    this.restartTimer = setTimeout(() => {
+      this.restartTimer = null;
       if (!this.shutdownRequested) {
         this.start().catch((err) => {
           this.log(`Restart failed: ${err.message}`);
@@ -293,6 +306,7 @@ export class VereManager extends EventEmitter {
   }
 
   async stop(): Promise<void> {
+    this.clearRestartTimer();
     this.shutdownRequested = true;
 
     if (!this.process) {
@@ -323,7 +337,7 @@ export class VereManager extends EventEmitter {
   }
 
   isPierCreated(): boolean {
-    const pierPath = getPierPath();
+    const pierPath = getPierPath(getConfig().moonId);
     return fs.existsSync(pierPath) && fs.existsSync(path.join(pierPath, ".urb"));
   }
 
