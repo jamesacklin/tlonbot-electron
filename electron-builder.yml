@@ -1,0 +1,40 @@
+appId: com.tlon.tlonbot
+productName: TlonBot
+directories:
+  output: release
+  buildResources: assets
+
+mac:
+  category: public.app-category.utilities
+  target:
+    - target: dmg
+      arch:
+        - arm64
+        - x64
+  extendInfo:
+    LSUIElement: true
+
+dmg:
+  title: "TlonBot"
+  contents:
+    - x: 130
+      y: 220
+    - x: 410
+      y: 220
+      type: link
+      path: /Applications
+
+asar: true
+
+extraResources:
+  - from: resources/tlon-plugin
+    to: tlon-plugin
+    filter:
+      - "**/*"
+      - "!.git"
+
+files:
+  - dist/**/*
+  - package.json
+
+afterPack: scripts/after-pack.js

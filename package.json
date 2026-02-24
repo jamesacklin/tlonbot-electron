@@ -1,0 +1,23 @@
+{
+  "name": "tlonbot",
+  "version": "0.1.0",
+  "description": "TlonBot – Menubar app bundling OpenClaw, Urbit vere, and the Tlon plugin",
+  "main": "dist/main/index.js",
+  "scripts": {
+    "build": "tsc && cp src/renderer/index.html src/renderer/styles.css dist/renderer/",
+    "start": "npm run build && electron .",
+    "dev": "tsc && electron .",
+    "package": "npm run build && electron-builder --mac",
+    "prepare-plugin": "bash scripts/prepare-plugin.sh"
+  },
+  "author": "Tlon Corporation",
+  "license": "MIT",
+  "devDependencies": {
+    "electron": "^35.0.0",
+    "electron-builder": "^26.0.0",
+    "typescript": "^5.7.0"
+  },
+  "dependencies": {
+    "openclaw": "latest"
+  }
+}
