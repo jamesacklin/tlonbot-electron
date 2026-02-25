@@ -1,5 +1,5 @@
 appId: com.tlon.tlonbot
-productName: TlonBot
+productName: Tlonbot
 directories:
   output: release
   buildResources: assets
@@ -15,7 +15,7 @@ mac:
     LSUIElement: true
 
 dmg:
-  title: "TlonBot"
+  title: "Tlonbot"
   contents:
     - x: 130
       y: 220

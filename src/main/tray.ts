@@ -34,7 +34,7 @@ export class TrayManager {
     }
 
     this.tray = new Tray(icon);
-    this.tray.setToolTip("TlonBot");
+    this.tray.setToolTip("Tlonbot");
     this.updateMenu();
   }
 
@@ -98,7 +98,7 @@ export class TrayManager {
 
     const contextMenu = Menu.buildFromTemplate([
       {
-        label: "TlonBot",
+        label: "Tlonbot",
         enabled: false,
       },
       { type: "separator" },
@@ -139,7 +139,7 @@ export class TrayManager {
       },
       { type: "separator" },
       {
-        label: "Quit TlonBot",
+        label: "Quit Tlonbot",
         click: () => this.onQuit?.(),
       },
     ]);

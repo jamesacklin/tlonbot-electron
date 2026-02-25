@@ -219,7 +219,7 @@ function updateProviderUi(provider: string): void {
     openrouterModelRow.style.display = "none";
     syncModelOptions(provider);
     apiKeyInput.placeholder = "Enter your MiniMax API key";
-    apiKeyHint.textContent = "Required: TlonBot does not include model credits or bundled API access.";
+    apiKeyHint.textContent = "Required: Tlonbot does not include model credits or bundled API access.";
     return;
   }
 
@@ -228,7 +228,7 @@ function updateProviderUi(provider: string): void {
     openrouterModelRow.style.display = "none";
     syncModelOptions(provider);
     apiKeyInput.placeholder = "Enter your Anthropic API key";
-    apiKeyHint.textContent = "Required: TlonBot does not include model credits or bundled API access.";
+    apiKeyHint.textContent = "Required: Tlonbot does not include model credits or bundled API access.";
     return;
   }
 
@@ -238,7 +238,7 @@ function updateProviderUi(provider: string): void {
     openrouterModelInput.value = "auto";
   }
   apiKeyInput.placeholder = "Enter your OpenRouter API key";
-  apiKeyHint.textContent = "Required: TlonBot does not include model credits or bundled API access.";
+  apiKeyHint.textContent = "Required: Tlonbot does not include model credits or bundled API access.";
 }
 
 // Provider radio toggle

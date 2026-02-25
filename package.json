@@ -1,7 +1,7 @@
 {
   "name": "tlonbot",
   "version": "0.1.0",
-  "description": "TlonBot – Menubar app bundling OpenClaw, Urbit vere, and the Tlon plugin",
+  "description": "Tlonbot – Menubar app bundling OpenClaw, Urbit vere, and the Tlon plugin",
   "main": "dist/main/index.js",
   "scripts": {
     "copy-renderer": "cp src/renderer/index.html src/renderer/styles.css dist/renderer/",
