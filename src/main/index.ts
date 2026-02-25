@@ -1,6 +1,11 @@
 import { app, BrowserWindow, shell } from "electron";
 import * as path from "path";
-import { isSetupComplete, ensureDirectories, generateOpenClawConfig } from "./config";
+import {
+  isSetupComplete,
+  ensureDirectories,
+  generateOpenClawConfig,
+  installTlonPlugin,
+} from "./config";
 import { TrayManager } from "./tray";
 import { VereManager } from "./processes/vere";
 import { OpenClawManager } from "./processes/openclaw";
@@ -73,7 +78,9 @@ async function startServices(): Promise<void> {
     if (vere.isPierCreated()) {
       await vere.start();
     }
-    // Keep OpenClaw channel URL aligned if vere port changed (e.g. conflict fallback).
+    // Ensure external tlon plugin is installed and dependencies are present.
+    installTlonPlugin();
+    // Keep OpenClaw channel URL aligned with current vere config.
     generateOpenClawConfig();
     // Then start OpenClaw
     await openclaw.start();

@@ -2,6 +2,7 @@ import { app } from "electron";
 import * as path from "path";
 import * as fs from "fs";
 import * as crypto from "crypto";
+import { spawnSync } from "child_process";
 
 export interface TlonBotConfig {
   moonId: string;
@@ -31,6 +32,26 @@ const defaults: TlonBotConfig = {
   setupComplete: false,
 };
 
+function normalizePort(value: unknown, fallback: number): number {
+  const parsed =
+    typeof value === "number"
+      ? value
+      : typeof value === "string"
+        ? Number(value)
+        : NaN;
+  return Number.isInteger(parsed) && parsed > 0 && parsed <= 65535
+    ? parsed
+    : fallback;
+}
+
+function normalizeConfig(config: TlonBotConfig): TlonBotConfig {
+  return {
+    ...config,
+    verePort: normalizePort(config.verePort, defaults.verePort),
+    gatewayPort: normalizePort(config.gatewayPort, defaults.gatewayPort),
+  };
+}
+
 function getConfigFilePath(): string {
   return path.join(app.getPath("userData"), "tlonbot-config.json");
 }
@@ -39,7 +60,15 @@ function readStore(): TlonBotConfig {
   const filePath = getConfigFilePath();
   try {
     const data = fs.readFileSync(filePath, "utf-8");
-    return { ...defaults, ...JSON.parse(data) };
+    const merged = { ...defaults, ...JSON.parse(data) } as TlonBotConfig;
+    const normalized = normalizeConfig(merged);
+    if (
+      merged.verePort !== normalized.verePort ||
+      merged.gatewayPort !== normalized.gatewayPort
+    ) {
+      writeStore(normalized);
+    }
+    return normalized;
   } catch {
     return { ...defaults };
   }
@@ -58,7 +87,7 @@ export function getConfig(): TlonBotConfig {
 
 export function setConfig(partial: Partial<TlonBotConfig>): void {
   const current = readStore();
-  const updated = { ...current, ...partial };
+  const updated = normalizeConfig({ ...current, ...partial } as TlonBotConfig);
   writeStore(updated);
 }
 
@@ -171,6 +200,103 @@ export function getTlonPluginPath(): string {
   return path.join(getExtensionsPath(), "tlon");
 }
 
+function hasPluginManifest(pluginDir: string): boolean {
+  return fs.existsSync(path.join(pluginDir, "openclaw.plugin.json"));
+}
+
+function readJson(filePath: string): Record<string, unknown> | null {
+  try {
+    return JSON.parse(fs.readFileSync(filePath, "utf-8")) as Record<string, unknown>;
+  } catch {
+    return null;
+  }
+}
+
+function getPluginVersion(pluginDir: string): string {
+  const pkg = readJson(path.join(pluginDir, "package.json"));
+  return typeof pkg?.version === "string" ? pkg.version : "";
+}
+
+function hasPluginRuntimeDependencies(pluginDir: string): boolean {
+  return fs.existsSync(
+    path.join(pluginDir, "node_modules", "@tloncorp", "api", "package.json")
+  );
+}
+
+function formatSpawnFailure(result: ReturnType<typeof spawnSync>): string {
+  const stdout = (result.stdout ?? "").toString().trim();
+  const stderr = (result.stderr ?? "").toString().trim();
+  return [stdout, stderr].filter((part) => part.length > 0).join("\n");
+}
+
+function installPluginDependencies(pluginDir: string): void {
+  const npmCmd = process.platform === "win32" ? "npm.cmd" : "npm";
+  const result = spawnSync(npmCmd, ["install"], {
+    cwd: pluginDir,
+    encoding: "utf-8",
+    env: {
+      ...process.env,
+      npm_config_fund: "false",
+      npm_config_audit: "false",
+    },
+  });
+
+  if (result.error || result.status !== 0) {
+    const detail = result.error?.message || formatSpawnFailure(result) || "unknown npm error";
+    throw new Error(`Failed to install Tlon plugin dependencies: ${detail}`);
+  }
+}
+
+function resolveBundledPluginPath(): string {
+  const appPath = app.getAppPath();
+  const candidates = Array.from(
+    new Set(
+      [
+        path.join(process.resourcesPath, "tlon-plugin"),
+        path.join(appPath, "resources", "tlon-plugin"),
+        path.join(appPath, "..", "tlon-plugin"),
+        path.join(process.cwd(), "resources", "tlon-plugin"),
+      ].map((candidate) => path.resolve(candidate))
+    )
+  );
+
+  const bundledPath = candidates.find((candidate) => hasPluginManifest(candidate));
+  if (!bundledPath) {
+    throw new Error(
+      `Bundled Tlon plugin not found. Checked: ${candidates.join(", ")}`
+    );
+  }
+
+  return bundledPath;
+}
+
+function removeBundledOpenClawTlonPlugin(): void {
+  const appPath = app.getAppPath();
+  const openclawRoots = Array.from(
+    new Set(
+      [
+        path.join(process.cwd(), "node_modules", "openclaw"),
+        path.join(appPath, "node_modules", "openclaw"),
+        path.join(appPath, "..", "node_modules", "openclaw"),
+      ].map((candidate) => path.resolve(candidate))
+    )
+  );
+
+  const bundledPluginPaths = ["extensions/tlon", "node_modules/tlon"];
+  for (const root of openclawRoots) {
+    if (!fs.existsSync(root)) continue;
+    for (const relPath of bundledPluginPaths) {
+      const fullPath = path.join(root, relPath);
+      if (!fs.existsSync(fullPath)) continue;
+      try {
+        fs.rmSync(fullPath, { recursive: true, force: true });
+      } catch {
+        // Best-effort only; packaged app paths may be read-only.
+      }
+    }
+  }
+}
+
 export function getLogsPath(): string {
   return path.join(getAppDataPath(), "logs");
 }
@@ -198,6 +324,11 @@ export function generateGatewayToken(): string {
 
 export function generateOpenClawConfig(): void {
   const config = getConfig();
+  const controlUiOrigins = [
+    `http://localhost:${config.gatewayPort}`,
+    `http://127.0.0.1:${config.gatewayPort}`,
+    `http://[::1]:${config.gatewayPort}`,
+  ];
 
   const openclawConfig: Record<string, unknown> = {
     agents: {
@@ -210,10 +341,18 @@ export function generateOpenClawConfig(): void {
       port: config.gatewayPort,
       mode: "local",
       auth: { token: config.gatewayToken },
+      controlUi: {
+        allowedOrigins: controlUiOrigins,
+      },
     },
     plugins: {
-      load: { paths: [getTlonPluginPath()] },
-      entries: { tlon: { enabled: true } },
+      allow: ["tlon"],
+      load: {
+        paths: [getTlonPluginPath()],
+      },
+      entries: {
+        tlon: { enabled: true },
+      },
     },
     channels: {
       tlon: {
@@ -222,6 +361,10 @@ export function generateOpenClawConfig(): void {
         code: config.moonCode,
         url: `http://localhost:${config.verePort}`,
         ownerShip: config.ownerShip,
+        inviteAllowlist: [config.ownerShip],
+        groupInviteAllowlist: [config.ownerShip],
+        defaultAuthorizedShips: [config.ownerShip],
+        autoAcceptDmInvites: false,
         dmAllowlist: [config.ownerShip],
         allowPrivateNetwork: true,
         autoDiscoverChannels: true,
@@ -252,13 +395,29 @@ export function generateOpenClawConfig(): void {
 }
 
 export function installTlonPlugin(): void {
-  const bundledPluginPath = path.join(
-    process.resourcesPath || path.join(app.getAppPath(), "resources"),
-    "tlon-plugin"
-  );
   const targetPath = getTlonPluginPath();
+  const bundledPath = resolveBundledPluginPath();
+  const sourceVersion = getPluginVersion(bundledPath);
+  const targetVersion = getPluginVersion(targetPath);
+  const needsRefresh =
+    !hasPluginManifest(targetPath) ||
+    sourceVersion !== targetVersion ||
+    !hasPluginRuntimeDependencies(targetPath);
 
-  if (fs.existsSync(bundledPluginPath)) {
-    fs.cpSync(bundledPluginPath, targetPath, { recursive: true });
+  // Match the working setup script behavior: prefer external tlon extension.
+  removeBundledOpenClawTlonPlugin();
+
+  if (needsRefresh) {
+    fs.rmSync(targetPath, { recursive: true, force: true });
+    fs.mkdirSync(path.dirname(targetPath), { recursive: true });
+    fs.cpSync(bundledPath, targetPath, { recursive: true });
+  }
+
+  if (!hasPluginRuntimeDependencies(targetPath)) {
+    installPluginDependencies(targetPath);
+  }
+
+  if (!hasPluginManifest(targetPath) || !hasPluginRuntimeDependencies(targetPath)) {
+    throw new Error(`Tlon plugin install is incomplete at ${targetPath}`);
   }
 }

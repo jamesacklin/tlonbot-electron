@@ -60,6 +60,45 @@ function tryExtractFromTar(archivePath: string, outputPath: string): boolean {
   return true;
 }
 
+function commandOutput(result: ReturnType<typeof spawnSync>): string {
+  const stdout = (result.stdout ?? "").toString().trim();
+  const stderr = (result.stderr ?? "").toString().trim();
+  return [stdout, stderr].filter((part) => part.length > 0).join("\n");
+}
+
+function ensureValidCodeSignature(binaryPath: string): void {
+  const verify = spawnSync("codesign", ["--verify", "--verbose=2", binaryPath], {
+    encoding: "utf-8",
+  });
+
+  if (verify.error) {
+    throw new Error(`Unable to verify vere code signature: ${verify.error.message}`);
+  }
+
+  if (verify.status === 0) {
+    return;
+  }
+
+  const sign = spawnSync(
+    "codesign",
+    ["--force", "--sign", "-", "--timestamp=none", binaryPath],
+    { encoding: "utf-8" }
+  );
+
+  if (sign.error || sign.status !== 0) {
+    const reason = sign.error?.message || commandOutput(sign) || "unknown signing error";
+    throw new Error(`Failed to ad-hoc sign vere binary: ${reason}`);
+  }
+
+  const reverify = spawnSync("codesign", ["--verify", "--verbose=2", binaryPath], {
+    encoding: "utf-8",
+  });
+  if (reverify.error || reverify.status !== 0) {
+    const reason = reverify.error?.message || commandOutput(reverify) || "unknown verify error";
+    throw new Error(`Vere code signature remains invalid after signing: ${reason}`);
+  }
+}
+
 function getVereDownloadUrl(): string {
   const arch = os.arch() === "arm64" ? "aarch64" : "x86_64";
   return `https://urbit.org/install/macos-${arch}/latest`;
@@ -151,6 +190,7 @@ export function downloadVere(onProgress?: ProgressCallback): Promise<string> {
 
               // Make executable
               fs.chmodSync(targetPath, 0o755);
+              ensureValidCodeSignature(targetPath);
               resolve(targetPath);
             } catch (err) {
               if (fs.existsSync(tmpPath)) fs.unlinkSync(tmpPath);

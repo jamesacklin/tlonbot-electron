@@ -1,4 +1,4 @@
-import { ChildProcess, spawn } from "child_process";
+import { ChildProcess, spawn, spawnSync } from "child_process";
 import { EventEmitter } from "events";
 import * as fs from "fs";
 import * as net from "net";
@@ -72,18 +72,20 @@ export class VereManager extends EventEmitter {
   }
 
   private async resolveAvailablePort(preferredPort: number): Promise<number> {
+    if (!Number.isInteger(preferredPort) || preferredPort <= 0 || preferredPort > 65535) {
+      throw new Error(`Invalid vere HTTP port: ${preferredPort}`);
+    }
+
     try {
       await this.reservePort(preferredPort);
       return preferredPort;
     } catch (err: any) {
-      if (err?.code !== "EADDRINUSE") {
-        throw err;
+      if (err?.code === "EADDRINUSE") {
+        throw new Error(
+          `HTTP port ${preferredPort} is already in use. Free port ${preferredPort} and retry.`
+        );
       }
-
-      const fallbackPort = await this.reservePort(0);
-      this.log(`Port ${preferredPort} is in use; switching vere HTTP port to ${fallbackPort}`);
-      setConfig({ verePort: fallbackPort });
-      return fallbackPort;
+      throw err;
     }
   }
 
@@ -91,6 +93,25 @@ export class VereManager extends EventEmitter {
     if (this.restartTimer) {
       clearTimeout(this.restartTimer);
       this.restartTimer = null;
+    }
+  }
+
+  private assertVereBinaryUsable(verePath: string): void {
+    const verify = spawnSync("codesign", ["--verify", "--verbose=2", verePath], {
+      encoding: "utf-8",
+    });
+
+    if (verify.error) {
+      throw new Error(`Unable to verify vere binary signature: ${verify.error.message}`);
+    }
+
+    if (verify.status !== 0) {
+      const detail = `${verify.stdout ?? ""}${verify.stderr ?? ""}`.trim();
+      throw new Error(
+        `Vere binary has an invalid code signature. Re-download the runtime.${
+          detail ? ` (${detail})` : ""
+        }`
+      );
     }
   }
 
@@ -104,6 +125,7 @@ export class VereManager extends EventEmitter {
       const verePath = getVereBinaryPath();
       const pierPath = getPierPath(moonId);
       const config = getConfig();
+      this.assertVereBinaryUsable(verePath);
 
       // urbit -c requires the target pier path to not exist.
       // Clean up stale/partial first-run pier dirs before create.
@@ -126,13 +148,8 @@ export class VereManager extends EventEmitter {
         }
       }
 
-      this.resolveAvailablePort(0)
+      this.resolveAvailablePort(config.verePort)
         .then((resolvedPort) => {
-          if (config.verePort !== resolvedPort) {
-            this.log(`Using vere HTTP port ${resolvedPort} for initial boot`);
-            setConfig({ verePort: resolvedPort });
-          }
-
           // First boot (urbit 4.x):
           // ./urbit -w <moon-name> -G <key> -c <pier-path> --http-port <port>
           const moonName = moonId.trim().replace(/^~+/, "");
@@ -246,6 +263,7 @@ export class VereManager extends EventEmitter {
       const verePath = getVereBinaryPath();
       const pierPath = getPierPath(getConfig().moonId);
       const config = getConfig();
+      this.assertVereBinaryUsable(verePath);
 
       this.resolveAvailablePort(config.verePort)
         .then((resolvedPort) => {

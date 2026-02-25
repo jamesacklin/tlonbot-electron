@@ -69,13 +69,13 @@ export function registerIpcHandlers(
       win?.webContents.send("setup-status", "Generating gateway token...");
       generateGatewayToken();
 
+      // Install the tlon extension and its runtime dependencies.
+      win?.webContents.send("setup-status", "Installing Tlon plugin...");
+      installTlonPlugin();
+
       // Generate openclaw.json config
       win?.webContents.send("setup-status", "Writing OpenClaw config...");
       generateOpenClawConfig();
-
-      // Install tlon plugin from app bundle
-      win?.webContents.send("setup-status", "Installing Tlon plugin...");
-      installTlonPlugin();
 
       // Start OpenClaw gateway
       win?.webContents.send("setup-status", "Starting OpenClaw gateway...");
