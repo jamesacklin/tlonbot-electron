@@ -12,6 +12,7 @@ import {
 } from "../config";
 
 export type VereState = "stopped" | "booting" | "running" | "error";
+const SOLID_PILL_URL = "https://bootstrap.tlon.network/props/4.3/solid.pill";
 
 export class VereManager extends EventEmitter {
   private process: ChildProcess | null = null;
@@ -116,6 +117,29 @@ export class VereManager extends EventEmitter {
     }
   }
 
+  private resolveBootstrapArgs(verePath: string): string[] {
+    const probe = spawnSync(verePath, [], {
+      encoding: "utf-8",
+    });
+    const usageText = `${probe.stdout ?? ""}\n${probe.stderr ?? ""}`;
+
+    if (usageText.includes("--bootstrap-pill")) {
+      return ["--bootstrap-pill", SOLID_PILL_URL];
+    }
+
+    if (usageText.includes("--bootstrap-url")) {
+      this.log(
+        "Vere does not support --bootstrap-pill; using --bootstrap-url for solid pill bootstrap."
+      );
+      return ["--bootstrap-url", SOLID_PILL_URL];
+    }
+
+    this.log(
+      "Unable to detect bootstrap flag support; defaulting to --bootstrap-pill for solid pill bootstrap."
+    );
+    return ["--bootstrap-pill", SOLID_PILL_URL];
+  }
+
   async boot(moonId: string, moonKey: string): Promise<string> {
     return new Promise((resolve, reject) => {
       this.clearRestartTimer();
@@ -154,10 +178,12 @@ export class VereManager extends EventEmitter {
           // First boot (urbit 4.x):
           // ./urbit -w <moon-name> -G <key> -c <pier-path> --http-port <port>
           const moonName = moonId.trim().replace(/^~+/, "");
+          const bootstrapArgs = this.resolveBootstrapArgs(verePath);
           const args = [
             "-t",
             "-w", moonName,
             "-G", moonKey,
+            ...bootstrapArgs,
             "-c", pierPath,
             "--http-port", String(resolvedPort),
           ];
@@ -166,6 +192,7 @@ export class VereManager extends EventEmitter {
             "-t",
             "-w", moonName,
             "-G", "[redacted]",
+            ...bootstrapArgs,
             "-c", pierPath,
             "--http-port", String(resolvedPort),
           ];
