@@ -1,155 +1,239 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'">
-  <title>TlonBot Setup</title>
-  <link rel="stylesheet" href="styles.css">
-</head>
-<body>
-  <div class="wizard">
-    <div class="step-indicator">
-      <div class="step-dot active" data-step="0"></div>
-      <div class="step-dot" data-step="1"></div>
-      <div class="step-dot" data-step="2"></div>
-      <div class="step-dot" data-step="3"></div>
-      <div class="step-dot" data-step="4"></div>
-    </div>
-
-    <!-- Step 0: Welcome -->
-    <div class="step active" id="step-0">
-      <h1>Welcome to TlonBot</h1>
-      <p>TlonBot connects an AI assistant to your Tlon identity through a local Urbit moon. It runs quietly in your menubar.</p>
-      <p>This wizard will guide you through:</p>
-      <div class="instructions">
-        <ol>
-          <li>Entering your moon credentials from Horizon</li>
-          <li>Choosing an AI provider and model</li>
-          <li>Downloading the Urbit runtime and booting your moon</li>
-        </ol>
-      </div>
-      <p>The whole process takes a few minutes.</p>
-      <div class="btn-row">
-        <button class="primary" id="btn-step-0-next">Get Started</button>
-      </div>
-    </div>
-
-    <!-- Step 1: Moon Credentials -->
-    <div class="step" id="step-1">
-      <h2>Moon Credentials</h2>
-      <p>You'll need a moon from your Tlon ship. Follow these steps to generate one:</p>
-      <div class="instructions">
-        <ol>
-          <li>Go to <a href="https://horizon.tlon.network" target="_blank">horizon.tlon.network</a> and log in</li>
-          <li>Navigate to <code>/apps/webterm</code></li>
-          <li>Run <code>|moon</code> in the terminal</li>
-          <li>Copy the moon name and key string from the output</li>
-        </ol>
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'"
+    />
+    <title>Tlonbot Setup</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <div class="wizard">
+      <div class="step-indicator">
+        <div class="step-dot active" data-step="0"></div>
+        <div class="step-dot" data-step="1"></div>
+        <div class="step-dot" data-step="2"></div>
+        <div class="step-dot" data-step="3"></div>
+        <div class="step-dot" data-step="4"></div>
       </div>
 
-      <label for="owner-ship">Owner Ship (your main identity)</label>
-      <input type="text" id="owner-ship" placeholder="~sampel-palnet">
-      <div class="input-hint">Your Tlon identity that owns the moon</div>
-
-      <label for="moon-id">Moon Name</label>
-      <input type="text" id="moon-id" placeholder="~mipbur-moswep-sampel-palnet">
-      <div class="input-hint">The moon name from the |moon output</div>
-
-      <label for="moon-key">Key String</label>
-      <input type="password" id="moon-key" placeholder="0w3.abcde.fghij.klmno.pqrst">
-      <div class="input-hint">The long hex key string from the |moon output</div>
-
-      <div class="btn-row">
-        <button id="btn-step-1-back">Back</button>
-        <button class="primary" id="btn-step-1-next">Next</button>
-      </div>
-    </div>
-
-    <!-- Step 2: API Provider -->
-    <div class="step" id="step-2">
-      <h2>AI Provider</h2>
-      <p>Choose which AI service to use. MiniMax offers a free tier to get started.</p>
-
-      <div class="radio-group">
-        <div class="radio-option">
-          <input type="radio" name="provider" id="provider-minimax" value="minimax" checked>
-          <label for="provider-minimax">MiniMax</label>
-          <span class="radio-desc">Free tier available</span>
+      <!-- Step 0: Welcome -->
+      <div class="step active" id="step-0">
+        <h1>Welcome to Tlonbot</h1>
+        <p>
+          Tlonbot connects an AI assistant to your Tlon identity through a local
+          Urbit moon. It runs quietly in your menubar.
+        </p>
+        <p>This wizard will guide you through:</p>
+        <div class="instructions">
+          <ol>
+            <li>Entering your moon credentials from Horizon</li>
+            <li>Choosing an AI provider and model</li>
+            <li>Downloading the Urbit runtime and booting your moon</li>
+          </ol>
         </div>
-        <div class="radio-option">
-          <input type="radio" name="provider" id="provider-anthropic" value="anthropic">
-          <label for="provider-anthropic">Anthropic</label>
-          <span class="radio-desc">Claude models</span>
-        </div>
-        <div class="radio-option">
-          <input type="radio" name="provider" id="provider-openrouter" value="openrouter">
-          <label for="provider-openrouter">OpenRouter</label>
-          <span class="radio-desc">Multiple models</span>
+        <p>The whole process takes a few minutes.</p>
+        <div class="btn-row">
+          <button class="primary" id="btn-step-0-next">Get Started</button>
         </div>
       </div>
 
-      <div id="api-key-section" class="api-key-field">
-        <label for="api-key">API Key</label>
-        <input type="password" id="api-key" placeholder="Enter your API key">
-      </div>
-
-      <label for="model-select">Model</label>
-      <select id="model-select">
-        <option value="minimax/MiniMax-M1">MiniMax M1 (Free)</option>
-        <option value="anthropic/claude-sonnet-4-6">Claude Sonnet 4.6</option>
-        <option value="anthropic/claude-haiku-4-5">Claude Haiku 4.5</option>
-        <option value="openrouter/auto">OpenRouter Auto</option>
-      </select>
-
-      <div class="btn-row">
-        <button id="btn-step-2-back">Back</button>
-        <button class="primary" id="btn-step-2-next">Next</button>
-      </div>
-    </div>
-
-    <!-- Step 3: Download & Boot -->
-    <div class="step" id="step-3">
-      <h2>Download &amp; Boot</h2>
-      <p id="arch-label">Detecting architecture...</p>
-
-      <div class="progress-container">
-        <div class="progress-bar">
-          <div class="progress-fill" id="progress-fill"></div>
+      <!-- Step 1: Moon Credentials -->
+      <div class="step" id="step-1">
+        <h2>Moon Credentials</h2>
+        <p>
+          You'll need a moon from your Tlon ship. Follow these steps to generate
+          one:
+        </p>
+        <div class="instructions">
+          <ol>
+            <li>
+              Go to
+              <a href="https://horizon.tlon.network" target="_blank"
+                >horizon.tlon.network</a
+              >
+              and log in
+            </li>
+            <li>Navigate to <code>/apps/webterm</code></li>
+            <li>Run <code>|moon</code> in the terminal</li>
+            <li>Copy the moon name and key string from the output</li>
+          </ol>
         </div>
-        <div class="progress-label" id="progress-label">Waiting to start...</div>
+
+        <label for="owner-ship">Owner Ship (your main identity)</label>
+        <input type="text" id="owner-ship" placeholder="~sampel-palnet" />
+        <div class="input-hint">Your Tlon identity that owns the moon</div>
+
+        <label for="moon-id">Moon Name</label>
+        <input
+          type="text"
+          id="moon-id"
+          placeholder="~mipbur-moswep-sampel-palnet"
+        />
+        <div class="input-hint">The moon name from the |moon output</div>
+
+        <label for="moon-key">Key String</label>
+        <input
+          type="password"
+          id="moon-key"
+          placeholder="0w3.abcde.fghij.klmno.pqrst"
+        />
+        <div class="input-hint">
+          The long hex key string from the |moon output
+        </div>
+
+        <div class="btn-row">
+          <button id="btn-step-1-back">Back</button>
+          <button class="primary" id="btn-step-1-next">Next</button>
+        </div>
       </div>
 
-      <div class="status-message" id="status-message"></div>
-      <div class="error-message" id="error-message" style="display:none"></div>
+      <!-- Step 2: API Provider -->
+      <div class="step" id="step-2">
+        <h2>AI Provider</h2>
+        <p>
+          Choose an AI provider and enter an API key. Tlonbot does not include
+          bundled model credits.
+        </p>
 
-      <div class="log-output" id="log-output"></div>
+        <div class="radio-group">
+          <div class="radio-option">
+            <input
+              type="radio"
+              name="provider"
+              id="provider-minimax"
+              value="minimax"
+              checked
+            />
+            <label for="provider-minimax">MiniMax</label>
+            <span class="radio-desc">Requires API key</span>
+          </div>
+          <div class="radio-option">
+            <input
+              type="radio"
+              name="provider"
+              id="provider-anthropic"
+              value="anthropic"
+            />
+            <label for="provider-anthropic">Anthropic</label>
+            <span class="radio-desc">Requires API key</span>
+          </div>
+          <div class="radio-option">
+            <input
+              type="radio"
+              name="provider"
+              id="provider-openrouter"
+              value="openrouter"
+            />
+            <label for="provider-openrouter">OpenRouter</label>
+            <span class="radio-desc">Requires API key</span>
+          </div>
+        </div>
 
-      <div class="btn-row">
-        <button id="btn-back-boot">Back</button>
-        <button class="primary" id="btn-boot">Start</button>
+        <div id="api-key-section" class="api-key-field">
+          <label for="api-key">API Key</label>
+          <input
+            type="password"
+            id="api-key"
+            placeholder="Enter your API key"
+          />
+          <div class="input-hint" id="api-key-hint">
+            Required to continue setup.
+          </div>
+        </div>
+
+        <div id="model-select-row">
+          <label for="model-select">Model</label>
+          <select id="model-select">
+            <option value="minimax/MiniMax-M2.1">MiniMax M2.1</option>
+            <option value="minimax/MiniMax-M2.1-lightning">
+              MiniMax M2.1 Lightning
+            </option>
+            <option value="anthropic/claude-sonnet-4-6">
+              Claude Sonnet 4.6
+            </option>
+            <option value="anthropic/claude-haiku-4-5">Claude Haiku 4.5</option>
+          </select>
+        </div>
+
+        <div id="openrouter-model-row" style="display: none">
+          <label for="openrouter-model-id">OpenRouter Model Identifier</label>
+          <input
+            type="text"
+            id="openrouter-model-id"
+            placeholder="stepfun/step-3.5-flash:free"
+          />
+          <div class="input-hint">
+            Enter OpenRouter model id (without the
+            <code>openrouter/</code> prefix).
+          </div>
+        </div>
+
+        <div class="btn-row">
+          <button id="btn-step-2-back">Back</button>
+          <button class="primary" id="btn-step-2-next">Next</button>
+        </div>
+      </div>
+
+      <!-- Step 3: Download & Boot -->
+      <div class="step" id="step-3">
+        <h2>Download &amp; Boot</h2>
+        <p id="arch-label">Detecting architecture...</p>
+
+        <div class="progress-container">
+          <div class="progress-bar">
+            <div class="progress-fill" id="progress-fill"></div>
+          </div>
+          <div class="progress-label" id="progress-label">
+            Waiting to start...
+          </div>
+        </div>
+
+        <div class="status-message" id="status-message"></div>
+        <div
+          class="error-message"
+          id="error-message"
+          style="display: none"
+        ></div>
+
+        <div class="log-output" id="log-output"></div>
+
+        <div class="btn-row">
+          <button id="btn-back-boot">Back</button>
+          <button class="primary" id="btn-boot">Start</button>
+        </div>
+      </div>
+
+      <!-- Step 4: Done -->
+      <div class="step" id="step-4">
+        <h1>You're all set!</h1>
+        <p>
+          Tlonbot is running. It will stay in your menubar and manage your moon
+          and AI gateway automatically.
+        </p>
+
+        <div class="success-box">
+          <h3>Gateway URL</h3>
+          <p><code id="gateway-url">http://localhost:18789</code></p>
+        </div>
+
+        <p>
+          You can now DM your moon in Tlon Messenger and it will respond with
+          AI.
+        </p>
+        <p>
+          Use the menubar icon to manage Tlonbot, view logs, or change settings.
+        </p>
+
+        <div class="btn-row">
+          <button class="primary" id="btn-finish">Done</button>
+        </div>
       </div>
     </div>
 
-    <!-- Step 4: Done -->
-    <div class="step" id="step-4">
-      <h1>You're all set!</h1>
-      <p>TlonBot is running. It will stay in your menubar and manage your moon and AI gateway automatically.</p>
-
-      <div class="success-box">
-        <h3>Gateway URL</h3>
-        <p><code id="gateway-url">http://localhost:18789</code></p>
-      </div>
-
-      <p>You can now DM your moon in Tlon Messenger and it will respond with AI.</p>
-      <p>Use the menubar icon to manage TlonBot, view logs, or change settings.</p>
-
-      <div class="btn-row">
-        <button class="primary" id="btn-finish">Done</button>
-      </div>
-    </div>
-  </div>
-
-  <script src="setup.js"></script>
-</body>
+    <script src="setup.js"></script>
+  </body>
 </html>

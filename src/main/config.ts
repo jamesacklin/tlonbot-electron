@@ -25,12 +25,37 @@ const defaults: TlonBotConfig = {
   moonCode: "",
   apiProvider: "minimax",
   apiKey: "",
-  model: "minimax/MiniMax-M1",
+  model: "minimax/MiniMax-M2.1",
   gatewayToken: "",
   verePort: 8080,
   gatewayPort: 18789,
   setupComplete: false,
 };
+
+const legacyModelMap: Record<string, string> = {
+  "minimax/MiniMax-M1": "minimax/MiniMax-M2.1",
+  "minimax/minimax-m2.1": "minimax/MiniMax-M2.1",
+};
+
+function normalizeModel(value: unknown, provider: TlonBotConfig["apiProvider"]): string {
+  const raw = typeof value === "string" ? value.trim() : "";
+  const mapped = legacyModelMap[raw] ?? raw;
+
+  if (provider === "minimax") {
+    return mapped.startsWith("minimax/") ? mapped : "minimax/MiniMax-M2.1";
+  }
+
+  if (provider === "anthropic") {
+    return mapped.startsWith("anthropic/") ? mapped : "anthropic/claude-sonnet-4-6";
+  }
+
+  if (provider === "openrouter") {
+    if (!mapped) return "openrouter/auto";
+    return mapped.startsWith("openrouter/") ? mapped : `openrouter/${mapped}`;
+  }
+
+  return mapped || defaults.model;
+}
 
 function normalizePort(value: unknown, fallback: number): number {
   const parsed =
@@ -47,6 +72,7 @@ function normalizePort(value: unknown, fallback: number): number {
 function normalizeConfig(config: TlonBotConfig): TlonBotConfig {
   return {
     ...config,
+    model: normalizeModel(config.model, config.apiProvider),
     verePort: normalizePort(config.verePort, defaults.verePort),
     gatewayPort: normalizePort(config.gatewayPort, defaults.gatewayPort),
   };
@@ -64,7 +90,8 @@ function readStore(): TlonBotConfig {
     const normalized = normalizeConfig(merged);
     if (
       merged.verePort !== normalized.verePort ||
-      merged.gatewayPort !== normalized.gatewayPort
+      merged.gatewayPort !== normalized.gatewayPort ||
+      merged.model !== normalized.model
     ) {
       writeStore(normalized);
     }
@@ -324,6 +351,7 @@ export function generateGatewayToken(): string {
 
 export function generateOpenClawConfig(): void {
   const config = getConfig();
+  const primaryModel = normalizeModel(config.model, config.apiProvider);
   const controlUiOrigins = [
     `http://localhost:${config.gatewayPort}`,
     `http://127.0.0.1:${config.gatewayPort}`,
@@ -334,7 +362,7 @@ export function generateOpenClawConfig(): void {
     agents: {
       defaults: {
         workspace: getWorkspacePath(),
-        model: { primary: config.model },
+        model: { primary: primaryModel },
       },
     },
     gateway: {
@@ -378,15 +406,52 @@ export function generateOpenClawConfig(): void {
     session: { dmScope: "per-channel-peer" },
   };
 
-  // Add API key configuration based on provider
-  if (config.apiProvider !== "minimax" && config.apiKey) {
-    const env: Record<string, string> = {};
+  const env: Record<string, string> = {};
+  if (config.apiKey) {
     if (config.apiProvider === "anthropic") {
       env.ANTHROPIC_API_KEY = config.apiKey;
     } else if (config.apiProvider === "openrouter") {
       env.OPENROUTER_API_KEY = config.apiKey;
+    } else if (config.apiProvider === "minimax") {
+      env.MINIMAX_API_KEY = config.apiKey;
     }
+  }
+
+  if (Object.keys(env).length > 0) {
     openclawConfig.env = env;
+  }
+
+  // MiniMax requires an explicit provider block so model resolution works reliably.
+  if (config.apiProvider === "minimax") {
+    openclawConfig.models = {
+      mode: "merge",
+      providers: {
+        minimax: {
+          baseUrl: "https://api.minimax.io/anthropic",
+          api: "anthropic-messages",
+          models: [
+            {
+              id: "MiniMax-M2.1",
+              name: "MiniMax M2.1",
+              reasoning: false,
+              input: ["text"],
+              contextWindow: 200000,
+              maxTokens: 8192,
+              cost: { input: 15, output: 60, cacheRead: 2, cacheWrite: 10 },
+            },
+            {
+              id: "MiniMax-M2.1-lightning",
+              name: "MiniMax M2.1 Lightning",
+              reasoning: false,
+              input: ["text"],
+              contextWindow: 200000,
+              maxTokens: 8192,
+              cost: { input: 5, output: 20, cacheRead: 1, cacheWrite: 5 },
+            },
+          ],
+        },
+      },
+    };
   }
 
   const configPath = getOpenClawConfigPath();

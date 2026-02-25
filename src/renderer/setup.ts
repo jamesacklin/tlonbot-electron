@@ -48,6 +48,7 @@ function nextStep(): void {
     saveCredentials();
   }
   if (currentStep === 2) {
+    if (!validateApiConfig()) return;
     saveApiConfig();
   }
   if (currentStep === 3) {
@@ -105,9 +106,51 @@ function saveApiConfig(): void {
     ) as HTMLInputElement
   ).value;
   const apiKey = ($("api-key") as HTMLInputElement).value.trim();
-  const model = ($("model-select") as HTMLSelectElement).value;
+  const model = resolveModelSelection(provider);
 
   tlonbotBridge.saveConfig({ apiProvider: provider, apiKey, model });
+}
+
+function providerLabel(provider: string): string {
+  if (provider === "anthropic") return "Anthropic";
+  if (provider === "openrouter") return "OpenRouter";
+  return "MiniMax";
+}
+
+function providerModelPrefix(provider: string): string {
+  if (provider === "anthropic") return "anthropic/";
+  if (provider === "openrouter") return "openrouter/";
+  return "minimax/";
+}
+
+function validateApiConfig(): boolean {
+  const provider = (
+    document.querySelector('input[name="provider"]:checked') as HTMLInputElement
+  ).value;
+  const apiKey = ($("api-key") as HTMLInputElement).value.trim();
+
+  if (!apiKey) {
+    alert(`${providerLabel(provider)} API key is required to continue.`);
+    return false;
+  }
+
+  if (provider === "openrouter") {
+    const openrouterModelId = ($("openrouter-model-id") as HTMLInputElement).value.trim();
+    if (!openrouterModelId) {
+      alert("Please enter an OpenRouter model identifier.");
+      return false;
+    }
+    return true;
+  }
+
+  const model = ($("model-select") as HTMLSelectElement).value;
+  const requiredPrefix = providerModelPrefix(provider);
+  if (!model.startsWith(requiredPrefix)) {
+    alert(`Please choose a ${providerLabel(provider)} model.`);
+    return false;
+  }
+
+  return true;
 }
 
 async function initBootStep(): Promise<void> {
@@ -115,18 +158,103 @@ async function initBootStep(): Promise<void> {
   $("arch-label").textContent = `Detected: ${arch}. Will download the matching Urbit runtime.`;
 }
 
+const modelCatalog = Array.from(($("model-select") as HTMLSelectElement).options).map((option) => ({
+  value: option.value,
+  label: option.textContent ?? option.value,
+}));
+
+function syncModelOptions(provider: string): void {
+  const modelSelect = $("model-select") as HTMLSelectElement;
+  const currentValue = modelSelect.value;
+  const requiredPrefix = providerModelPrefix(provider);
+  const providerModels = modelCatalog.filter((model) => model.value.startsWith(requiredPrefix));
+
+  modelSelect.innerHTML = "";
+  for (const model of providerModels) {
+    const option = document.createElement("option");
+    option.value = model.value;
+    option.textContent = model.label;
+    modelSelect.appendChild(option);
+  }
+
+  if (providerModels.length === 0) {
+    return;
+  }
+
+  const selectedValue = providerModels.some((model) => model.value === currentValue)
+    ? currentValue
+    : providerModels[0].value;
+  modelSelect.value = selectedValue;
+}
+
+function normalizeOpenRouterModel(input: string): string {
+  const trimmed = input.trim();
+  if (!trimmed) {
+    return "openrouter/auto";
+  }
+  return trimmed.startsWith("openrouter/") ? trimmed : `openrouter/${trimmed}`;
+}
+
+function resolveModelSelection(provider: string): string {
+  if (provider === "openrouter") {
+    const modelId = ($("openrouter-model-id") as HTMLInputElement).value;
+    return normalizeOpenRouterModel(modelId);
+  }
+  return ($("model-select") as HTMLSelectElement).value;
+}
+
+function updateProviderUi(provider: string): void {
+  const apiKeySection = $("api-key-section");
+  const apiKeyInput = $("api-key") as HTMLInputElement;
+  const apiKeyHint = $("api-key-hint");
+  const modelSelectRow = $("model-select-row");
+  const openrouterModelRow = $("openrouter-model-row");
+  const openrouterModelInput = $("openrouter-model-id") as HTMLInputElement;
+
+  // Keep key entry visible for all providers.
+  apiKeySection.classList.add("visible");
+
+  if (provider === "minimax") {
+    modelSelectRow.style.display = "block";
+    openrouterModelRow.style.display = "none";
+    syncModelOptions(provider);
+    apiKeyInput.placeholder = "Enter your MiniMax API key";
+    apiKeyHint.textContent = "Required: TlonBot does not include model credits or bundled API access.";
+    return;
+  }
+
+  if (provider === "anthropic") {
+    modelSelectRow.style.display = "block";
+    openrouterModelRow.style.display = "none";
+    syncModelOptions(provider);
+    apiKeyInput.placeholder = "Enter your Anthropic API key";
+    apiKeyHint.textContent = "Required: TlonBot does not include model credits or bundled API access.";
+    return;
+  }
+
+  modelSelectRow.style.display = "none";
+  openrouterModelRow.style.display = "block";
+  if (!openrouterModelInput.value.trim()) {
+    openrouterModelInput.value = "auto";
+  }
+  apiKeyInput.placeholder = "Enter your OpenRouter API key";
+  apiKeyHint.textContent = "Required: TlonBot does not include model credits or bundled API access.";
+}
+
 // Provider radio toggle
 document.querySelectorAll('input[name="provider"]').forEach((radio) => {
   radio.addEventListener("change", () => {
     const value = (radio as HTMLInputElement).value;
-    const apiKeySection = $("api-key-section");
-    if (value === "minimax") {
-      apiKeySection.classList.remove("visible");
-    } else {
-      apiKeySection.classList.add("visible");
-    }
+    updateProviderUi(value);
   });
 });
+
+const selectedProvider = document.querySelector(
+  'input[name="provider"]:checked'
+) as HTMLInputElement | null;
+if (selectedProvider) {
+  updateProviderUi(selectedProvider.value);
+}
 
 async function startDownloadAndBoot(): Promise<void> {
   const btn = $("btn-boot") as HTMLButtonElement;

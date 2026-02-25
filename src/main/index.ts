@@ -5,6 +5,7 @@ import {
   ensureDirectories,
   generateOpenClawConfig,
   installTlonPlugin,
+  getConfig,
 } from "./config";
 import { TrayManager } from "./tray";
 import { VereManager } from "./processes/vere";
@@ -17,6 +18,12 @@ const tray = new TrayManager();
 const vere = new VereManager();
 const openclaw = new OpenClawManager();
 let isQuitting = false;
+
+function providerLabel(provider: string): string {
+  if (provider === "anthropic") return "Anthropic";
+  if (provider === "openrouter") return "OpenRouter";
+  return "MiniMax";
+}
 
 function createSetupWindow(): BrowserWindow {
   const win = new BrowserWindow({
@@ -74,6 +81,13 @@ function setupTray(): void {
 
 async function startServices(): Promise<void> {
   try {
+    const config = getConfig();
+    if (!config.apiKey.trim()) {
+      throw new Error(
+        `${providerLabel(config.apiProvider)} API key is required. Open Settings and add it in Step 2.`
+      );
+    }
+
     // Start vere first
     if (vere.isPierCreated()) {
       await vere.start();

@@ -11,6 +11,12 @@ import { downloadVere, getArchitectureLabel } from "./downloader";
 import { VereManager } from "./processes/vere";
 import { OpenClawManager } from "./processes/openclaw";
 
+function providerLabel(provider: string): string {
+  if (provider === "anthropic") return "Anthropic";
+  if (provider === "openrouter") return "OpenRouter";
+  return "MiniMax";
+}
+
 export function registerIpcHandlers(
   vere: VereManager,
   openclaw: OpenClawManager
@@ -63,6 +69,14 @@ export function registerIpcHandlers(
     const win = BrowserWindow.fromWebContents(event.sender);
 
     try {
+      const currentConfig = getConfig();
+      if (!currentConfig.apiKey.trim()) {
+        return {
+          success: false,
+          error: `${providerLabel(currentConfig.apiProvider)} API key is required. Go back to Step 2 and add it.`,
+        };
+      }
+
       ensureDirectories();
 
       // Generate gateway token
