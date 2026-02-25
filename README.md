@@ -1,363 +1,174 @@
-# TlonBot Electron App
+# Tlonbot Electron App
 
-## Context
+Tlonbot is a macOS menu bar app that runs a local Urbit moon (`vere`), OpenClaw Gateway, and the Tlon OpenClaw plugin. It handles first-run setup and then keeps both services running from the tray.
 
-The goal is to create a macOS menubar/tray Electron app that bundles **OpenClaw** (AI assistant gateway), the **Urbit vere runtime** (for running a local moon), and the **Tlon plugin** (connecting OpenClaw to Urbit messaging). Today, setting these up requires multiple manual steps: generating moon credentials on Horizon, downloading vere, booting the moon, running `+code`, installing OpenClaw, cloning the Tlon plugin, and writing config files. This app automates all of that into a download-and-run experience.
+## Current App Architecture
 
-## Architecture Overview
+### High-level
 
-```
-┌─────────────────────────────────────────┐
-│           Electron Main Process         │
-│                                         │
-│  ┌─────────┐  ┌─────────┐  ┌────────┐  │
-│  │  Tray   │  │  Setup  │  │ Config │  │
-│  │ Manager │  │ Wizard  │  │ Store  │  │
-│  └─────────┘  └─────────┘  └────────┘  │
-│                                         │
-│  ┌──────────────────────────────────┐   │
-│  │       Process Manager            │   │
-│  │  ┌────────────┐ ┌────────────┐   │   │
-│  │  │   vere     │ │  OpenClaw  │   │   │
-│  │  │ (child     │ │  gateway   │   │   │
-│  │  │  process)  │ │ (child     │   │   │
-│  │  │            │ │  process)  │   │   │
-│  │  └────────────┘ └────────────┘   │   │
-│  └──────────────────────────────────┘   │
-└─────────────────────────────────────────┘
+```text
+Electron Main Process
+├── App lifecycle + orchestration (src/main/index.ts)
+├── Tray UI and controls (src/main/tray.ts)
+├── IPC handlers for setup/status (src/main/ipc.ts)
+├── Config + filesystem + plugin install (src/main/config.ts)
+├── Vere download/validation (src/main/downloader.ts)
+├── Vere child process manager (src/main/processes/vere.ts)
+└── OpenClaw child process manager (src/main/processes/openclaw.ts)
+
+Renderer Process
+└── Setup wizard UI (src/renderer/index.html, src/renderer/setup.ts)
+
+Preload
+└── Secure bridge for renderer -> ipcMain calls (src/preload/index.ts)
 ```
 
-**What's bundled in the app:**
+### Runtime responsibilities
 
-- Electron runtime (includes Node.js)
-- OpenClaw npm package (in node_modules)
-- openclaw-tlon plugin (in app resources, with deps)
+- `index.ts`
+  - Creates tray at startup.
+  - Shows setup window when `setupComplete` is false.
+  - On normal launches, starts `vere` first, refreshes moon `+code`, regenerates OpenClaw config, then starts OpenClaw.
+  - On quit, shuts down OpenClaw then `vere`.
+- `VereManager`
+  - Boots new moons with `urbit -t -w <moon> -G <key> -c <pier> --http-port <port>`.
+  - Starts existing piers with `urbit -t --http-port <port> <pier>`.
+  - Detects readiness from `http: web interface live on http://localhost:<port>`.
+  - Extracts `+code` via `conn.sock` using `urbit eval` khan calls.
+  - Writes logs to `logs/vere.log` and restarts with exponential backoff (up to 5 attempts).
+- `OpenClawManager`
+  - Starts gateway with `openclaw gateway --port <gatewayPort> --bind lan --token <token>`.
+  - Sets `OPENCLAW_HOME`, `OPENCLAW_STATE_DIR`, and `OPENCLAW_CONFIG_PATH`.
+  - Waits for `/health` before marking running.
+  - Writes logs to `logs/openclaw.log` and restarts with exponential backoff (up to 5 attempts).
+- `config.ts`
+  - Persists app config in `tlonbot-config.json`.
+  - Generates `openclaw/openclaw.json` (gateway auth, plugin loading, Tlon channel settings, tool allow/deny, model/provider config).
+  - Installs/copies bundled `resources/tlon-plugin` into user data `extensions/tlon` and installs plugin dependencies when needed.
 
-**Downloaded on first launch:**
+## Setup Flow (Current Implementation)
 
-- vere binary (~50MB, architecture-detected: Apple Silicon or Intel)
+### First launch (setup wizard)
 
-**Generated during setup:**
+1. User enters:
+   - owner ship (`~...`)
+   - moon name (`~...`)
+   - moon key
+   - AI provider + model (+ API key where needed)
+2. App downloads the correct macOS `vere` binary from `https://urbit.org/install/macos-{aarch64|x86_64}/latest`.
+3. App validates payload type, extracts gzip/tar when needed, marks executable, and verifies/ad-hoc-signs code signature.
+4. App boots the moon, waits for Eyre, and extracts fresh `+code`.
+5. App finalizes setup:
+   - generates gateway token
+   - installs Tlon plugin
+   - refreshes `+code` again
+   - writes OpenClaw config
+   - starts OpenClaw gateway
+   - marks `setupComplete: true`
 
-- Moon pier directory (from user-provided credentials)
-- `openclaw.json` config
-- Gateway auth token
+### Subsequent launches
 
-## Tech Stack
+1. Tray starts.
+2. If setup is complete and a pier exists, `vere` starts.
+3. `+code` is refreshed.
+4. Plugin install/config are reconciled.
+5. OpenClaw starts and health-checks.
 
-- **Electron** 35+ with electron-builder for packaging
-- **TypeScript** throughout
-- **Vanilla HTML/CSS** for setup wizard (keep it simple, no React needed)
-- **Node.js child_process** for managing vere and OpenClaw
+## Persistent Data Layout
 
-## Data Directories
+On macOS this lives under `~/Library/Application Support/tlonbot/`:
 
-All app data lives under `~/Library/Application Support/TlonBot/`:
-
-```
-~/Library/Application Support/TlonBot/
+```text
+tlonbot/
+├── tlonbot-config.json
 ├── bin/
-│   └── urbit              # Downloaded vere binary
-├── pier/                  # Urbit moon pier (created on first boot)
+│   └── urbit
+├── piers/
+│   └── <moon-name>/
 ├── openclaw/
-│   ├── openclaw.json      # Generated config
-│   └── workspace/         # OpenClaw workspace (prompts, etc.)
+│   ├── openclaw.json
+│   ├── state/
+│   └── workspace/
 ├── extensions/
-│   └── tlon/              # openclaw-tlon plugin (copied from app bundle)
+│   └── tlon/
 └── logs/
     ├── vere.log
     └── openclaw.log
 ```
 
+Notes:
+
+- Legacy fallbacks are supported for older installs (`pier/` and `openclaw/.openclaw/openclaw.json`).
+- Default ports are `vere: 8080` and `gateway: 18789`.
+
 ## Project Structure
 
-```
+```text
 tlonbot-electron/
-├── package.json
-├── tsconfig.json
-├── electron-builder.yml
 ├── src/
 │   ├── main/
-│   │   ├── index.ts              # Entry point, app lifecycle
-│   │   ├── tray.ts               # Tray icon, menu, status
-│   │   ├── config.ts             # Config generation & persistence
-│   │   ├── downloader.ts         # vere binary download with progress
-│   │   ├── processes/
-│   │   │   ├── vere.ts           # Spawn/manage vere, parse output, extract +code
-│   │   │   └── openclaw.ts       # Spawn/manage openclaw gateway
-│   │   └── ipc.ts                # IPC handlers for renderer communication
-│   ├── renderer/
-│   │   ├── index.html            # Setup wizard shell
-│   │   ├── setup.ts              # Setup wizard logic
-│   │   └── styles.css            # Minimal styling
-│   └── preload/
-│       └── index.ts              # Secure IPC bridge
-├── assets/
-│   ├── tray-iconTemplate.png     # 22x22 menubar icon
-│   └── tray-iconTemplate@2x.png  # Retina menubar icon
+│   │   ├── index.ts
+│   │   ├── ipc.ts
+│   │   ├── config.ts
+│   │   ├── downloader.ts
+│   │   ├── tray.ts
+│   │   └── processes/
+│   │       ├── vere.ts
+│   │       └── openclaw.ts
+│   ├── preload/
+│   │   └── index.ts
+│   └── renderer/
+│       ├── index.html
+│       ├── setup.ts
+│       └── styles.css
 ├── resources/
-│   └── tlon-plugin/              # Bundled openclaw-tlon plugin (git submodule)
-└── scripts/
-    ├── prepare-plugin.sh         # Build script to install plugin deps
-    ├── after-pack.js             # electron-builder afterPack hook
-    └── generate-icons.js         # Generate placeholder tray icons
+│   └── tlon-plugin/      # git submodule
+├── scripts/
+│   ├── prepare-plugin.sh
+│   ├── after-pack.js
+│   └── generate-icons.js
+├── electron-builder.yml
+└── package.json
 ```
 
-## Implementation Steps
+## Local Development Setup
 
-### Step 1: Project Scaffolding
+### Prerequisites
 
-Initialize Electron project with TypeScript, electron-builder, and development tooling.
+- macOS (downloader and runtime management are macOS-specific)
+- Node.js + npm
+- `git` with submodule support
+- System `tar` and `codesign` available in PATH
 
-**Files:** `package.json`, `tsconfig.json`, `electron-builder.yml`
-
-Key dependencies:
-
-- `electron` (dev)
-- `electron-builder` (dev)
-- `typescript` (dev)
-- `openclaw` (bundled AI gateway)
-
-electron-builder config:
-
-- Target: `dmg` for macOS
-- `asar: true` (pack app code)
-- `extraResources`: include `resources/tlon-plugin` directory
-- `mac.category`: `public.app-category.utilities`
-- No dock icon by default (`LSUIElement: true` in Info.plist)
-
-### Step 2: Main Process Entry (`src/main/index.ts`)
-
-App lifecycle:
-
-1. On `app.ready`: Check if first run (no config exists)
-2. **First run**: Show setup wizard window
-3. **Subsequent runs**: Start tray, boot vere, then start OpenClaw
-4. On `app.before-quit`: Gracefully shut down OpenClaw, then vere
-5. On `window-all-closed`: Don't quit (tray app stays running)
-
-### Step 3: Setup Wizard (`src/renderer/`)
-
-A single-window, multi-step wizard shown on first launch:
-
-**Step 1 - Welcome**: Brief explanation of what the app does.
-
-**Step 2 - Moon Credentials**:
-
-- Instructions with numbered steps + link to `https://horizon.tlon.network`
-- Guide: log in, go to `/apps/webterm`, run `|moon`, copy moon ID + key string
-- Input fields: Moon ID (`~mipbur-moswep-sampel-palnet`), Key string (long hex)
-- Input field: Owner ship (`~sampel-palnet`) - your main Tlon identity
-
-**Step 3 - API Key**:
-
-- Radio selection: Anthropic / OpenRouter / MiniMax (free default)
-- API key input field (conditional on selection)
-- Model selection dropdown
-
-**Step 4 - Download & Boot**:
-
-- Auto-detect architecture (Apple Silicon vs Intel)
-- Download vere with progress bar from `https://urbit.org/install/macos-{arch}/latest`
-- Make binary executable
-- Boot moon: spawn `./urbit -w moon-id -G keystring -p 8080` in pier directory
-- Monitor stdout for boot completion
-- Send `+code` to stdin, capture access code from stdout
-- Show status updates throughout
-
-**Step 5 - Done**:
-
-- Generate `openclaw.json` with all gathered config
-- Copy and install tlon plugin from app resources
-- Start OpenClaw gateway
-- Show success message with gateway URL
-- Transition to tray mode
-
-### Step 4: Vere Process Manager (`src/main/processes/vere.ts`)
-
-```typescript
-// Key responsibilities:
-// - Download vere binary (first launch)
-// - Spawn vere as child process
-// - First boot: `./urbit -w <moon> -G <key> -p <port>` (creates pier)
-// - Subsequent boots: `./urbit <pier-path> -p <port>`
-// - Parse stdout for HTTP port and boot status
-// - Extract +code by writing to stdin after boot
-// - Handle crashes with auto-restart (with backoff)
-// - Graceful shutdown via SIGTERM
-```
-
-Stdout parsing patterns:
-
-- Boot complete: look for `http: web interface live on http://localhost:XXXX`
-- `+code` response: look for `~.` followed by the code pattern
-
-### Step 5: OpenClaw Process Manager (`src/main/processes/openclaw.ts`)
-
-```typescript
-// Key responsibilities:
-// - Resolve openclaw binary from node_modules/.bin/openclaw
-// - Spawn: `openclaw gateway --port 18789 --bind lan --token <token>`
-// - Set OPENCLAW_HOME env var to app data dir
-// - Wait for gateway to be healthy (poll /health endpoint)
-// - Handle crashes with auto-restart
-// - Graceful shutdown via SIGTERM
-```
-
-The OpenClaw process depends on vere being ready (moon booted + code extracted), so it starts sequentially after vere.
-
-### Step 6: Config Generation (`src/main/config.ts`)
-
-Generate `openclaw.json` modeled on the tlonbot repo's config:
-
-```json
-{
-  "agents": {
-    "defaults": {
-      "workspace": "<app-data>/openclaw/workspace",
-      "model": { "primary": "<user-selected-model>" }
-    }
-  },
-  "gateway": {
-    "port": 18789,
-    "mode": "local",
-    "auth": { "token": "<generated-uuid>" }
-  },
-  "plugins": {
-    "load": { "paths": ["<app-data>/extensions/tlon"] },
-    "entries": { "tlon": { "enabled": true } }
-  },
-  "channels": {
-    "tlon": {
-      "enabled": true,
-      "ship": "<moon-id>",
-      "code": "<extracted-code>",
-      "url": "http://localhost:<vere-port>",
-      "ownerShip": "<owner-ship>",
-      "dmAllowlist": ["<owner-ship>"],
-      "allowPrivateNetwork": true,
-      "autoDiscoverChannels": true
-    }
-  },
-  "tools": {
-    "allow": ["web_fetch", "message", "web_search", "read", "tlon"],
-    "deny": ["bash", "canvas", "exec", "gateway", "nodes", "process"],
-    "elevated": { "enabled": false }
-  },
-  "session": { "dmScope": "per-channel-peer" }
-}
-```
-
-### Step 7: Tray Manager (`src/main/tray.ts`)
-
-macOS menubar tray with status indicator:
-
-```
-Menu items:
-─────────────────────────
- TlonBot                  (bold, app name)
-─────────────────────────
- Status: Running          (or Starting.../Stopped/Error)
- Urbit: ● Online          (green dot)
- OpenClaw: ● Online       (green dot)
-─────────────────────────
- Open Dashboard            → opens browser to gateway URL
-─────────────────────────
- Start / Stop              → toggle processes
- Settings...               → opens setup wizard for editing
- View Logs                 → opens log files in Console.app
-─────────────────────────
- Quit TlonBot
-```
-
-Tray icon states:
-
-- Normal: standard icon
-- Starting: animated/pulsing
-- Error: icon with red indicator
-
-### Step 8: Build & Packaging
-
-`electron-builder.yml`:
-
-- Build tlon-plugin dependencies during `afterPack` hook
-- Universal binary support (both arm64 and x64)
-- Code sign with Apple Developer ID (if available, otherwise unsigned for dev)
-- DMG installer with drag-to-Applications layout
-
-Build script (`scripts/prepare-plugin.sh`):
-
-- Copy `resources/tlon-plugin` to staging area
-- Run `npm install --production` in the plugin directory
-- This runs as part of the electron-builder build process
-
-### Step 9: Logging
-
-Write vere and OpenClaw stdout/stderr to rotating log files in `<app-data>/logs/`. The "View Logs" tray menu item opens the log directory in Finder or the current log in Console.app.
-
-## Startup Sequence (after first-run setup)
-
-```
-1. App launches (no dock icon, tray only)
-2. Read config from electron-store
-3. Spawn vere child process with pier path
-4. Wait for vere HTTP server to come online (parse stdout)
-5. Spawn OpenClaw gateway child process
-6. Wait for gateway health check to pass
-7. Update tray: "Status: Running"
-8. User interacts via Tlon Messenger → messages reach moon → OpenClaw processes them
-```
-
-## Shutdown Sequence
-
-```
-1. User clicks "Quit TlonBot" or Cmd+Q
-2. Send SIGTERM to OpenClaw process, wait up to 5s
-3. Send SIGTERM to vere process, wait up to 10s (pier needs clean shutdown)
-4. If processes don't exit, SIGKILL
-5. App exits
-```
-
-## Key External References
-
-- **vere download URLs**: `https://urbit.org/install/macos-aarch64/latest` (Apple Silicon), `https://urbit.org/install/macos-x86_64/latest` (Intel)
-- **OpenClaw npm package**: `openclaw` (global install or local dep)
-- **Tlon plugin repo**: `https://github.com/tloncorp/openclaw-tlon`
-- **tlonbot config repo**: `https://github.com/tloncorp/tlonbot` (for openclaw.json template and prompts)
-- **Selfhost setup script**: `tlonbot/selfhost/tlon-openclaw.sh` (reference implementation)
-
-## Development
+### Install
 
 ```bash
-# Install dependencies
+git clone <repo-url>
+cd tlonbot-electron
+git submodule update --init --recursive
 npm install
-
-# Build TypeScript
-npm run build
-
-# Run in development
-npm run dev
-
-# Package as DMG
-npm run package
-```
-
-### Setting up the Tlon Plugin
-
-Clone the openclaw-tlon plugin into the resources directory:
-
-```bash
-git clone https://github.com/tloncorp/openclaw-tlon resources/tlon-plugin
 npm run prepare-plugin
 ```
 
-## Verification
+### Run
 
-1. **Build**: `npm run build && npm run package` produces a `.dmg`
-2. **First launch**: Setup wizard appears, all steps complete
-3. **vere boots**: Moon comes online, `+code` is extracted
-4. **OpenClaw starts**: Gateway responds on `http://localhost:18789`
-5. **Tray works**: Icon visible, menu items functional, "Open Dashboard" opens browser
-6. **Messaging works**: DM the moon in Tlon Messenger, get a response
-7. **Restart**: Quit and relaunch - skips setup, goes straight to tray, boots services
-8. **Clean shutdown**: Quit from tray, both processes terminate cleanly
+```bash
+npm run dev
+```
+
+Useful scripts:
+
+- `npm run build`: compile TypeScript and copy renderer assets to `dist/`
+- `npm run start`: build and run Electron
+- `npm run dev`: current dev entry (build + run)
+- `npm run package`: build macOS DMG via electron-builder
+
+## Packaging
+
+`electron-builder.yml` currently builds:
+
+- macOS DMG for `arm64` and `x64`
+- tray-style app (`LSUIElement: true`, no Dock icon)
+- `asar: true`
+- bundled `resources/tlon-plugin` via `extraResources`
+- `afterPack` hook that runs `npm install --production` inside packaged `tlon-plugin`
