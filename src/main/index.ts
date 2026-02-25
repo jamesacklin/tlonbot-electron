@@ -77,6 +77,10 @@ async function startServices(): Promise<void> {
     // Start vere first
     if (vere.isPierCreated()) {
       await vere.start();
+      // Always refresh +code before launching OpenClaw so auth uses current credentials.
+      await vere.refreshCode();
+    } else {
+      throw new Error("Pier not found. Complete moon setup before starting services.");
     }
     // Ensure external tlon plugin is installed and dependencies are present.
     installTlonPlugin();

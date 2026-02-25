@@ -23,6 +23,7 @@ export class VereManager extends EventEmitter {
   private restartDelay = 2000;
   private shutdownRequested = false;
   private httpPort: number | null = null;
+  private readonly codePattern = /\b~?([a-z]{6}(?:-[a-z]{6}){3})\b/g;
 
   getState(): VereState {
     return this.state;
@@ -174,8 +175,18 @@ export class VereManager extends EventEmitter {
             stdio: ["pipe", "pipe", "pipe"],
           });
 
-          let codeExtracted = false;
           let bootComplete = false;
+          let settled = false;
+          const safeResolve = (code: string) => {
+            if (settled) return;
+            settled = true;
+            resolve(code);
+          };
+          const safeReject = (error: Error) => {
+            if (settled) return;
+            settled = true;
+            reject(error);
+          };
 
           const onData = (data: Buffer) => {
             const text = data.toString();
@@ -185,34 +196,20 @@ export class VereManager extends EventEmitter {
             const httpMatch = text.match(
               /http: web interface live on http:\/\/localhost:(\d+)/
             );
-            if (httpMatch) {
+            if (httpMatch && !bootComplete) {
               this.httpPort = parseInt(httpMatch[1], 10);
               bootComplete = true;
               this.setState("running");
               this.restartCount = 0;
               this.emit("ready", this.httpPort);
 
-              // Now extract +code
-              setTimeout(() => {
-                this.extractCode()
-                  .then((code) => resolve(code))
-                  .catch(reject);
-              }, 2000);
-            }
-
-            // Detect +code response (pattern: ~sampel-sampel-sampel-sampel)
-            if (!codeExtracted) {
-              const codeMatch = text.match(
-                /\s*(~?[a-z]{6}-[a-z]{6}-[a-z]{6}-[a-z]{6})\s*$/m
-              );
-              if (codeMatch && bootComplete) {
-                const code = codeMatch[1].startsWith("~")
-                  ? codeMatch[1].slice(1)
-                  : codeMatch[1];
-                codeExtracted = true;
-                setConfig({ moonCode: code });
-                this.emit("codeExtracted", code);
-              }
+              // Once Eyre is live, fetch +code over conn.sock via khan.
+              void this.extractCode(pierPath, moonId)
+                .then((code) => safeResolve(code))
+                .catch((err: any) => {
+                  this.setState("error");
+                  safeReject(err instanceof Error ? err : new Error(String(err)));
+                });
             }
           };
 
@@ -224,31 +221,32 @@ export class VereManager extends EventEmitter {
           this.process.on("error", (err) => {
             this.log(`Process error: ${err.message}`);
             this.setState("error");
-            reject(err);
+            safeReject(err instanceof Error ? err : new Error(String(err)));
           });
 
           this.process.on("exit", (code, signal) => {
             this.log(`Process exited with code ${code} signal ${signal ?? "none"}`);
-            if (!this.shutdownRequested && !bootComplete) {
+            if (!this.shutdownRequested && !settled) {
               this.setState("error");
               const details = code === null && signal ? `signal ${signal}` : `code ${code}`;
-              reject(new Error(`vere exited during boot with ${details}`));
+              safeReject(new Error(`vere exited during boot with ${details}`));
             }
           });
 
           // Timeout for boot
           setTimeout(() => {
-            if (!bootComplete) {
+            if (!settled) {
               this.log("Boot timeout after 5 minutes");
               this.setState("error");
-              reject(new Error("vere boot timed out"));
+              safeReject(new Error("vere boot timed out"));
             }
           }, 300000);
         })
         .catch((err: any) => {
           this.log(`Failed to resolve vere port: ${err.message}`);
           this.setState("error");
-          reject(err);
+          const error = err instanceof Error ? err : new Error(String(err));
+          reject(error);
         });
     });
   }
@@ -325,45 +323,228 @@ export class VereManager extends EventEmitter {
     });
   }
 
-  private extractCode(): Promise<string> {
-    return new Promise((resolve, reject) => {
-      if (!this.process?.stdin) {
-        reject(new Error("No stdin available"));
-        return;
+  async refreshCode(moonId?: string): Promise<string> {
+    if (this.state !== "running") {
+      throw new Error("Cannot refresh +code: vere is not running");
+    }
+
+    const resolvedMoonId = (moonId ?? getConfig().moonId).trim();
+    if (!resolvedMoonId) {
+      throw new Error("Cannot refresh +code: moon ID is not configured");
+    }
+
+    const pierPath = getPierPath(resolvedMoonId);
+    return this.extractCode(pierPath, resolvedMoonId);
+  }
+
+  private async extractCode(pierPath: string, moonId: string): Promise<string> {
+    const connSockPath = await this.waitForConnSocket(pierPath);
+    const normalizedMoonId = moonId.trim().replace(/^~+/, "").toLowerCase();
+    const maxAttempts = 30;
+    let lastError: Error | null = null;
+
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      try {
+        const code = await this.queryCodeOverConn(connSockPath, normalizedMoonId);
+        setConfig({ moonCode: code });
+        this.emit("codeExtracted", code);
+        this.log(`+code extracted via conn.sock on attempt ${attempt}`);
+        return code;
+      } catch (err: any) {
+        lastError = err instanceof Error ? err : new Error(String(err));
+        this.log(`+code extraction attempt ${attempt}/${maxAttempts} failed: ${lastError.message}`);
+        if (attempt < maxAttempts) {
+          await this.delay(1500);
+        }
       }
+    }
 
-      let codeBuffer = "";
+    throw new Error(
+      `Timed out waiting for +code response via conn.sock${
+        lastError ? `: ${lastError.message}` : ""
+      }`
+    );
+  }
 
-      const codeListener = (data: Buffer) => {
-        codeBuffer += data.toString();
-        const codeMatch = codeBuffer.match(
-          /([a-z]{6}-[a-z]{6}-[a-z]{6}-[a-z]{6})/
+  private async waitForConnSocket(pierPath: string, timeoutMs = 60000): Promise<string> {
+    const connSockPath = path.join(pierPath, ".urb", "conn.sock");
+    const start = Date.now();
+
+    while (Date.now() - start < timeoutMs) {
+      try {
+        const stats = fs.statSync(connSockPath);
+        if (stats.isSocket()) {
+          return connSockPath;
+        }
+      } catch {
+        // Socket is not ready yet.
+      }
+      await this.delay(250);
+    }
+
+    throw new Error(`conn.sock not ready at ${connSockPath}`);
+  }
+
+  private async queryCodeOverConn(connSockPath: string, normalizedMoonId: string): Promise<string> {
+    const codeThread =
+      "=/  m  (strand ,vase)  ;<  our=@p  bind:m  get-our  ;<  code=@p  bind:m  " +
+      "(scry @p /j/code/(scot %p our))  (pure:m !>((crip (slag 1 (scow %p code)))))";
+    const request = `[0 %fyrd %base %khan-eval %noun %ted-eval '${codeThread}']\n`;
+    const encodedRequest = await this.runUrbitEval(["-jn"], request);
+    const connResponse = await this.sendConnPayload(connSockPath, encodedRequest);
+    const decodedResponse = await this.runUrbitEval(["-ckn"], connResponse);
+    const decodedText = this.stripAnsi(decodedResponse.toString("utf-8"));
+    const matches = Array.from(decodedText.matchAll(this.codePattern), (match) =>
+      match[1].toLowerCase()
+    );
+
+    const code = matches.find((match) => match !== normalizedMoonId);
+    if (!code) {
+      throw new Error("No +code value found in khan response");
+    }
+
+    return code;
+  }
+
+  private runUrbitEval(args: string[], input: string | Buffer, timeoutMs = 15000): Promise<Buffer> {
+    return new Promise((resolve, reject) => {
+      const verePath = getVereBinaryPath();
+      const proc = spawn(verePath, ["eval", ...args], {
+        stdio: ["pipe", "pipe", "pipe"],
+      });
+
+      const stdoutChunks: Buffer[] = [];
+      let stderrText = "";
+      let settled = false;
+
+      const timer = setTimeout(() => {
+        proc.kill("SIGKILL");
+        if (!settled) {
+          settled = true;
+          reject(new Error(`urbit eval ${args.join(" ")} timed out`));
+        }
+      }, timeoutMs);
+
+      proc.stdout?.on("data", (chunk: Buffer) => {
+        stdoutChunks.push(chunk);
+      });
+
+      proc.stderr?.on("data", (chunk: Buffer) => {
+        stderrText += chunk.toString();
+      });
+
+      proc.on("error", (err) => {
+        clearTimeout(timer);
+        if (!settled) {
+          settled = true;
+          reject(err instanceof Error ? err : new Error(String(err)));
+        }
+      });
+
+      proc.on("close", (code, signal) => {
+        clearTimeout(timer);
+        if (settled) return;
+        settled = true;
+
+        const cleanStderr = this.stripAnsi(stderrText);
+        const hasEvalError = /(?:bail:|bailing out|syntax error|corrupted newt|invalid argument)/i.test(
+          cleanStderr
         );
-        if (codeMatch) {
-          this.process?.stdout?.removeListener("data", codeListener);
-          const code = codeMatch[1];
-          setConfig({ moonCode: code });
-          this.emit("codeExtracted", code);
-          resolve(code);
+        if (code !== 0 || signal || hasEvalError) {
+          const reason = signal ? `signal ${signal}` : `code ${code}`;
+          const detail = cleanStderr.trim();
+          reject(
+            new Error(
+              `urbit eval ${args.join(" ")} failed (${reason})${detail ? `: ${detail}` : ""}`
+            )
+          );
+          return;
+        }
+
+        resolve(Buffer.concat(stdoutChunks));
+      });
+
+      if (typeof input === "string") {
+        proc.stdin?.end(input);
+      } else {
+        proc.stdin?.write(input);
+        proc.stdin?.end();
+      }
+    });
+  }
+
+  private sendConnPayload(connSockPath: string, payload: Buffer, timeoutMs = 15000): Promise<Buffer> {
+    return new Promise((resolve, reject) => {
+      const socket = net.createConnection({ path: connSockPath });
+      const chunks: Buffer[] = [];
+      let settled = false;
+      let idleTimer: ReturnType<typeof setTimeout> | null = null;
+      const totalTimer = setTimeout(() => {
+        finish(new Error("Timed out waiting for conn.sock response"));
+      }, timeoutMs);
+
+      const clearTimers = () => {
+        clearTimeout(totalTimer);
+        if (idleTimer) {
+          clearTimeout(idleTimer);
+          idleTimer = null;
         }
       };
 
-      this.process.stdout?.on("data", codeListener);
-
-      // Send +code command to dojo
-      this.process.stdin.write("+code\n");
-
-      setTimeout(() => {
-        this.process?.stdout?.removeListener("data", codeListener);
-        // If we already have a code in config, use that
-        const existing = getConfig().moonCode;
-        if (existing) {
-          resolve(existing);
-        } else {
-          reject(new Error("Timed out waiting for +code response"));
+      const scheduleIdleFlush = () => {
+        if (idleTimer) {
+          clearTimeout(idleTimer);
         }
-      }, 30000);
+        // conn.c threaded replies may not close the socket; use inactivity as boundary.
+        idleTimer = setTimeout(() => {
+          finish(undefined, Buffer.concat(chunks));
+        }, 1200);
+      };
+
+      const finish = (err?: Error, data?: Buffer) => {
+        if (settled) return;
+        settled = true;
+        clearTimers();
+        socket.destroy();
+        if (err) {
+          reject(err);
+          return;
+        }
+        resolve(data ?? Buffer.alloc(0));
+      };
+
+      socket.on("connect", () => {
+        socket.write(payload);
+        scheduleIdleFlush();
+      });
+
+      socket.on("data", (chunk: Buffer) => {
+        chunks.push(chunk);
+        scheduleIdleFlush();
+      });
+
+      socket.on("error", (err) => {
+        finish(err instanceof Error ? err : new Error(String(err)));
+      });
+
+      socket.on("end", () => {
+        finish(undefined, Buffer.concat(chunks));
+      });
+
+      socket.on("close", () => {
+        if (!settled) {
+          finish(undefined, Buffer.concat(chunks));
+        }
+      });
     });
+  }
+
+  private delay(ms: number): Promise<void> {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+  }
+
+  private stripAnsi(text: string): string {
+    return text.replace(/\u001b\[[0-9;]*m/g, "");
   }
 
   private maybeRestart(): void {

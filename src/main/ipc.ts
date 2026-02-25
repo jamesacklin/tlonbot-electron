@@ -73,6 +73,10 @@ export function registerIpcHandlers(
       win?.webContents.send("setup-status", "Installing Tlon plugin...");
       installTlonPlugin();
 
+      // Ensure we persist the latest ship +code before writing OpenClaw config.
+      win?.webContents.send("setup-status", "Refreshing moon +code...");
+      await vere.refreshCode();
+
       // Generate openclaw.json config
       win?.webContents.send("setup-status", "Writing OpenClaw config...");
       generateOpenClawConfig();
