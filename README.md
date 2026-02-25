@@ -2,6 +2,8 @@
 
 Tlonbot is a macOS menu bar app that runs a local Urbit moon (`vere`), OpenClaw Gateway, and the Tlon OpenClaw plugin. It handles first-run setup and then keeps both services running from the tray.
 
+<img width="206" height="318" alt="02-systray" src="https://github.com/user-attachments/assets/080a565c-52a0-4c9f-80ba-3b0de3266ff7" />
+
 ## Current App Architecture
 
 ### High-level
